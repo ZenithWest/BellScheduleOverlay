@@ -236,8 +236,8 @@ class OverlayApp:
         if os.path.exists(ico_path):
             self.root.iconbitmap(ico_path)
 
-        # Transparency key (kept permanently enabled)
-        self.key_color = "#ff00ff"
+        # Transparency key - slightly off magenta (kept permanently enabled)
+        self.key_color = "#ff01ff"
         self.root.configure(bg=self.key_color)
 
         # --- scalable style (base values at scale=1.0) ---
@@ -295,6 +295,26 @@ class OverlayApp:
 
         # Context menu
         self.menu = tk.Menu(self.root, tearoff=0)
+        self.menu.add_command(label="Close", command=self.root.destroy)
+        self.menu = tk.Menu(self.root, tearoff=0)
+        self.color_menu = tk.Menu(self.menu, tearoff=0)
+
+        colors = [
+            ("White", "white"),
+            ("Black", "black"),
+            ("Yellow", "yellow"),
+            ("Magenta", "magenta"),
+            ("Green", "#7CFF00"),
+            ("Blue", "blue"),
+            ("Red", "red"),
+        ]
+
+
+        for label, value in colors:
+            self.color_menu.add_command(label=label, command=lambda v=value: self._set_text_color(v))
+
+        self.menu.add_cascade(label="Color", menu=self.color_menu)
+        self.menu.add_separator()
         self.menu.add_command(label="Close", command=self.root.destroy)
 
         # Drag/resize state
@@ -563,7 +583,6 @@ class OverlayApp:
 
         self.root.geometry(f"+{new_x}+{new_y}")
 
-
     def _on_left_up(self, _e):
         self._mode = None
         self._resize_dir = None
@@ -634,7 +653,6 @@ class OverlayApp:
         py = self.root.winfo_pointery() - self.root.winfo_rooty()
         return px, py
 
-
     def _snap_to_content(self, *, anchor: str = "topleft"):
         """
         Resize the window to exactly fit its content at the current scale.
@@ -667,6 +685,17 @@ class OverlayApp:
         # Update aspect so future resizes remain consistent with content shape
         if h > 0:
             self._aspect = w / h
+
+
+    def _set_text_color(self, color: str):
+        # Main text
+        self.title_lbl.configure(fg=color)
+        self.time_lbl.configure(fg=color)
+
+        # Optional: also change the help label color
+        # If you want help text to stay yellow always, leave this commented out.
+        # self.help_lbl.configure(fg=color)
+
 
     # ----------------------------
     # Main update loop
