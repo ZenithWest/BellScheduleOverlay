@@ -191,6 +191,34 @@ class WinClickThroughByHitTest:
             return self.HTTRANSPARENT
         return self._orig_wndproc(hwnd, msg, wparam, lparam)
 
+
+def force_taskbar_icon(hwnd: int):
+    """Force a borderless Tk window to show in the Windows taskbar."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+
+    GWL_EXSTYLE = -20
+    WS_EX_APPWINDOW = 0x00040000
+    WS_EX_TOOLWINDOW = 0x00000080
+
+    GetWindowLongW = user32.GetWindowLongW
+    SetWindowLongW = user32.SetWindowLongW
+    GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+    SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
+    GetWindowLongW.restype = ctypes.c_long
+    SetWindowLongW.restype = ctypes.c_long
+
+    exstyle = GetWindowLongW(hwnd, GWL_EXSTYLE)
+    exstyle = (exstyle | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW
+    SetWindowLongW(hwnd, GWL_EXSTYLE, exstyle)
+
+    # Nudge Windows to refresh the taskbar representation
+    user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
+                       0x0001 | 0x0002 | 0x0020)  # SWP_NOSIZE|SWP_NOMOVE|SWP_FRAMECHANGED
+
+
 # ----------------------------
 # Overlay UI
 # ----------------------------
@@ -200,9 +228,13 @@ class OverlayApp:
         self.items = load_schedule(schedule_path)
 
         self.root = tk.Tk()
-        self.root.title("Overlay Countdown")
+        self.root.title("Bell Schedule Overlay")
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
+
+        ico_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bell.ico")
+        if os.path.exists(ico_path):
+            self.root.iconbitmap(ico_path)
 
         # Transparency key (kept permanently enabled)
         self.key_color = "#ff00ff"
@@ -309,6 +341,9 @@ class OverlayApp:
 
         # Apply initial style scaling (sets paddings)
         self._apply_scale(self.scale)
+
+        if platform.system().lower() == "windows":
+            force_taskbar_icon(self.hwnd)
 
         self._tick()
 
