@@ -68,29 +68,43 @@ def compute_display(items: List[Item], now: datetime) -> Tuple[str, Optional[str
         end = dt_today(item.t2) if item.t2 else None
 
         if end is None:
+            # single-time item
             if now < begin:
                 return item.title, fmt_hhmmss(begin - now)
+
             nxt = next_begin_of(items, i)
             if nxt is not None:
                 nxt_dt = dt_today(nxt)
                 if begin <= now < nxt_dt:
-                    return f"Transitioning from {item.title} to {items[i+1].title}", None
+                    return (
+                        f"Transitioning from {item.title} to {items[i+1].title}",
+                        fmt_hhmmss(nxt_dt - now),
+                    )
+
         else:
+            # two-time item
             if now < begin:
                 return item.title, fmt_hhmmss(begin - now)
+
             if begin <= now < end:
                 return item.title, fmt_hhmmss(end - now)
+
             nxt = next_begin_of(items, i)
             if nxt is not None:
                 nxt_dt = dt_today(nxt)
                 if end <= now < nxt_dt:
-                    return f"Transitioning from {item.title} to {items[i+1].title}", None
+                    return (
+                        f"Transitioning from {item.title} to {items[i+1].title}",
+                        fmt_hhmmss(nxt_dt - now),
+                    )
 
+    # Past the last time of the last item => show elapsed
     last_dt = dt_today(last_time_of(items[-1]))
     if now >= last_dt:
         return "End of School", fmt_hhmmss(now - last_dt)
 
     return "Schedule", None
+
 
 # ----------------------------
 # Windows: global CTRL+SHIFT + WM_NCHITTEST click-through
