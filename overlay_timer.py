@@ -92,14 +92,14 @@ def compute_display(items: List[Item], now: datetime) -> Tuple[str, Optional[str
     return "Schedule", None
 
 # ----------------------------
-# Windows click-through
+# Windows helpers
 # ----------------------------
 
 def is_windows() -> bool:
     return platform.system().lower() == "windows"
 
 def set_clickthrough(hwnd: int, enable: bool) -> None:
-    """enable=True: mouse clicks pass through window; False: interactive."""
+    """enable=True => mouse clicks pass through; False => window receives mouse."""
     if not is_windows():
         return
     try:
@@ -119,16 +119,30 @@ def set_clickthrough(hwnd: int, enable: bool) -> None:
         SetWindowLongW.restype = ctypes.c_long
 
         ex = GetWindowLongW(hwnd, GWL_EXSTYLE)
-        ex |= WS_EX_LAYERED  # keep layered for Tk's transparentcolor
-
+        ex |= WS_EX_LAYERED
         if enable:
             ex |= WS_EX_TRANSPARENT
         else:
             ex &= ~WS_EX_TRANSPARENT
-
         SetWindowLongW(hwnd, GWL_EXSTYLE, ex)
     except Exception:
         pass
+
+def ctrl_shift_down_global() -> bool:
+    """Detect CTRL+SHIFT globally (works even if overlay is not focused)."""
+    if not is_windows():
+        return False
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        VK_CONTROL = 0x11
+        VK_SHIFT = 0x10
+        # high bit set when key is down
+        ctrl = (user32.GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0
+        shift = (user32.GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0
+        return ctrl and shift
+    except Exception:
+        return False
 
 # ----------------------------
 # Overlay UI
@@ -143,8 +157,8 @@ class OverlayApp:
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
 
-        # Use a very unlikely color key (not black/magenta)
-        self.key_color = "#01F1FE"
+        # Color key for transparency (choose something very unlikely)
+        self.key_color = self.transparent_color = "#ff00ff"
         self.root.configure(bg=self.key_color)
 
         self.title_var = tk.StringVar(value="")
@@ -161,7 +175,7 @@ class OverlayApp:
             padx=10,
             pady=2
         )
-        self.title_lbl.pack()
+        self.title_lbl.pack(fill="both")  # fill prevents "cyan sliver" gaps
 
         self.time_lbl = tk.Label(
             self.root,
@@ -174,9 +188,9 @@ class OverlayApp:
             padx=10,
             pady=0
         )
-        self.time_lbl.pack()
+        self.time_lbl.pack(fill="both")
 
-        # Menu
+        # Context menu
         self.menu = tk.Menu(self.root, tearoff=0)
         self.menu.add_command(label="Close", command=self.root.destroy)
 
@@ -185,41 +199,42 @@ class OverlayApp:
         self._drag_off_x = 0
         self._drag_off_y = 0
 
-        # Key state
-        self.ctrl_down = False
-        self.shift_down = False
-
-        # Bindings
-        self.root.bind_all("<KeyPress-Control_L>", self._ctrl_down)
-        self.root.bind_all("<KeyRelease-Control_L>", self._ctrl_up)
-        self.root.bind_all("<KeyPress-Control_R>", self._ctrl_down)
-        self.root.bind_all("<KeyRelease-Control_R>", self._ctrl_up)
-
-        self.root.bind_all("<KeyPress-Shift_L>", self._shift_down)
-        self.root.bind_all("<KeyRelease-Shift_L>", self._shift_up)
-        self.root.bind_all("<KeyPress-Shift_R>", self._shift_down)
-        self.root.bind_all("<KeyRelease-Shift_R>", self._shift_up)
-
+        # Mouse bindings (work when click-through is disabled)
         self.root.bind("<ButtonPress-1>", self._on_left_down)
         self.root.bind("<B1-Motion>", self._on_left_drag)
         self.root.bind("<ButtonRelease-1>", self._on_left_up)
         self.root.bind("<ButtonPress-3>", self._on_right_down)
+
+        # Backup close
         self.root.bind("<Escape>", lambda e: self.root.destroy())
 
-        # Place window
+        # Initial placement
         self._place_top_right(20, 20)
 
-        # IMPORTANT: realize window first, THEN set transparentcolor, THEN clickthrough
-        self.root.update()  # <-- this is key on Windows
-        try:
-            self.root.attributes("-transparentcolor", self.key_color)
-        except tk.TclError:
-            # fallback (shouldn't happen on Windows)
-            self.root.attributes("-alpha", 0.90)
+        # IMPORTANT: realize window, then apply transparentcolor
+        self.root.update()  # ensure HWND exists and window is mapped
+
+        # Apply transparency key (try both attribute spellings)
+        applied = False
+        for fn in (self.root.wm_attributes, self.root.attributes):
+            try:
+                fn("-transparentcolor", self.key_color)
+                applied = True
+                break
+            except tk.TclError:
+                continue
+
+        if not applied:
+            # Fallback: whole-window translucency (not ideal, but avoids black box)
+            try:
+                self.root.attributes("-alpha", 0.92)
+            except tk.TclError:
+                pass
 
         self.hwnd = self.root.winfo_id()
-        set_clickthrough(self.hwnd, True)
+        self._clickthrough_enabled = None  # unknown initially
 
+        # Start ticking
         self._tick()
 
     def _place_top_right(self, mx: int, my: int):
@@ -230,33 +245,16 @@ class OverlayApp:
         y = my
         self.root.geometry(f"+{x}+{y}")
 
-    def _ctrl_shift(self) -> bool:
-        return self.ctrl_down and self.shift_down
-
-    def _update_clickthrough(self):
-        # While CTRL+SHIFT is held, make overlay interactive
-        set_clickthrough(self.hwnd, enable=not self._ctrl_shift())
-
-    # Key handlers
-    def _ctrl_down(self, _e):
-        self.ctrl_down = True
-        self._update_clickthrough()
-
-    def _ctrl_up(self, _e):
-        self.ctrl_down = False
-        self._update_clickthrough()
-
-    def _shift_down(self, _e):
-        self.shift_down = True
-        self._update_clickthrough()
-
-    def _shift_up(self, _e):
-        self.shift_down = False
-        self._update_clickthrough()
+    def _set_clickthrough_if_needed(self, enable: bool):
+        if self._clickthrough_enabled is enable:
+            return
+        set_clickthrough(self.hwnd, enable=enable)
+        self._clickthrough_enabled = enable
 
     # Mouse handlers
     def _on_left_down(self, e):
-        if not self._ctrl_shift():
+        # Only allow drag while CTRL+SHIFT is held (we disable click-through during that)
+        if not ctrl_shift_down_global():
             return
         self._dragging = True
         self._drag_off_x = e.x
@@ -273,7 +271,7 @@ class OverlayApp:
         self._dragging = False
 
     def _on_right_down(self, _e):
-        if not self._ctrl_shift():
+        if not ctrl_shift_down_global():
             return
         try:
             self.menu.tk_popup(self.root.winfo_pointerx(), self.root.winfo_pointery())
@@ -281,16 +279,24 @@ class OverlayApp:
             self.menu.grab_release()
 
     def _tick(self):
+        # Global CTRL+SHIFT toggles click-through:
+        # - held => interactive (can drag / menu)
+        # - not held => click-through
+        interactive = ctrl_shift_down_global()
+        self._set_clickthrough_if_needed(enable=not interactive)
+
         now = datetime.now()
         title, timer = compute_display(self.items, now)
         self.title_var.set(title)
         self.time_var.set("" if timer is None else timer)
+
         self.root.after(200, self._tick)
 
     def run(self):
         self.root.mainloop()
 
 def default_schedule_path() -> str:
+    # Same folder as the script (Windows path)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(script_dir, "Bell-Schedule.txt")
 
@@ -298,6 +304,7 @@ def main():
     schedule_path = sys.argv[1] if len(sys.argv) > 1 else default_schedule_path()
     if not os.path.exists(schedule_path):
         print(f"Schedule file not found: {schedule_path}")
+        print("Put Bell-Schedule.txt next to overlay_timer.py (or pass a path as argv[1]).")
         sys.exit(1)
 
     OverlayApp(schedule_path).run()
