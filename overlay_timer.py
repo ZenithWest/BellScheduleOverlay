@@ -5,7 +5,6 @@ import tkinter as tk
 from dataclasses import dataclass
 from datetime import datetime, date, time, timedelta
 from typing import Optional, List, Tuple
-import traceback
 
 # ----------------------------
 # Schedule parsing
@@ -93,55 +92,89 @@ def compute_display(items: List[Item], now: datetime) -> Tuple[str, Optional[str
     return "Schedule", None
 
 # ----------------------------
-# Windows helpers
+# Windows: global CTRL+SHIFT + WM_NCHITTEST click-through
 # ----------------------------
 
 def is_windows() -> bool:
     return platform.system().lower() == "windows"
 
-def set_clickthrough(hwnd: int, enable: bool) -> None:
+def ctrl_shift_down_global() -> bool:
     if not is_windows():
-        return
-    try:
+        return False
+    import ctypes
+    user32 = ctypes.windll.user32
+    VK_CONTROL = 0x11
+    VK_SHIFT = 0x10
+    ctrl = (user32.GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0
+    shift = (user32.GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0
+    return ctrl and shift
+
+class WinClickThroughByHitTest:
+    """
+    Subclasses the Tk window proc.
+    When CTRL+SHIFT is NOT held -> return HTTRANSPARENT on WM_NCHITTEST (click-through).
+    When CTRL+SHIFT IS held -> behave normally (interactive).
+    """
+    def __init__(self, hwnd: int):
+        if not is_windows():
+            return
+
         import ctypes
         from ctypes import wintypes
 
-        GWL_EXSTYLE = -20
-        WS_EX_LAYERED = 0x00080000
-        WS_EX_TRANSPARENT = 0x00000020
+        self.ctypes = ctypes
+        self.wintypes = wintypes
+        self.user32 = ctypes.windll.user32
 
-        user32 = ctypes.windll.user32
-        GetWindowLongW = user32.GetWindowLongW
-        SetWindowLongW = user32.SetWindowLongW
-        GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
-        SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
-        GetWindowLongW.restype = ctypes.c_long
-        SetWindowLongW.restype = ctypes.c_long
+        self.WM_NCHITTEST = 0x0084
+        self.HTTRANSPARENT = -1
 
-        ex = GetWindowLongW(hwnd, GWL_EXSTYLE)
-        ex |= WS_EX_LAYERED
-        if enable:
-            ex |= WS_EX_TRANSPARENT
+        # Use SetWindowLongPtrW on 64-bit, SetWindowLongW on 32-bit
+        self.GWLP_WNDPROC = -4
+
+        WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_longlong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_long,
+                                     wintypes.HWND,
+                                     wintypes.UINT,
+                                     wintypes.WPARAM,
+                                     wintypes.LPARAM)
+
+        # Get original WndProc
+        GetWindowLongPtrW = getattr(self.user32, "GetWindowLongPtrW", None)
+        SetWindowLongPtrW = getattr(self.user32, "SetWindowLongPtrW", None)
+
+        if GetWindowLongPtrW and SetWindowLongPtrW:
+            GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+            GetWindowLongPtrW.restype = ctypes.c_void_p
+            SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+            SetWindowLongPtrW.restype = ctypes.c_void_p
+
+            self._orig = GetWindowLongPtrW(hwnd, self.GWLP_WNDPROC)
+            self._orig_wndproc = WNDPROC(self._orig)
+            self._new_wndproc = WNDPROC(self._proc)
+
+            SetWindowLongPtrW(hwnd, self.GWLP_WNDPROC, ctypes.cast(self._new_wndproc, ctypes.c_void_p))
         else:
-            ex &= ~WS_EX_TRANSPARENT
-        SetWindowLongW(hwnd, GWL_EXSTYLE, ex)
-    except Exception:
-        pass
+            # 32-bit fallback (rare nowadays)
+            GetWindowLongW = self.user32.GetWindowLongW
+            SetWindowLongW = self.user32.SetWindowLongW
+            GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+            GetWindowLongW.restype = ctypes.c_long
+            SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
+            SetWindowLongW.restype = ctypes.c_long
 
-def ctrl_shift_down_global() -> bool:
-    """Global CTRL+SHIFT state (does not require focus)."""
-    if not is_windows():
-        return False
-    try:
-        import ctypes
-        user32 = ctypes.windll.user32
-        VK_CONTROL = 0x11
-        VK_SHIFT = 0x10
-        ctrl = (user32.GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0
-        shift = (user32.GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0
-        return ctrl and shift
-    except Exception:
-        return False
+            self._orig = GetWindowLongW(hwnd, self.GWLP_WNDPROC)
+            self._orig_wndproc = WNDPROC(self._orig)
+            self._new_wndproc = WNDPROC(self._proc)
+            SetWindowLongW(hwnd, self.GWLP_WNDPROC, ctypes.cast(self._new_wndproc, ctypes.c_long))
+
+        # Keep references so GC doesn't collect callback
+        self._hwnd = hwnd
+
+    def _proc(self, hwnd, msg, wparam, lparam):
+        # If not holding CTRL+SHIFT, make mouse hit-test transparent
+        if msg == self.WM_NCHITTEST and not ctrl_shift_down_global():
+            return self.HTTRANSPARENT
+        return self._orig_wndproc(hwnd, msg, wparam, lparam)
 
 # ----------------------------
 # Overlay UI
@@ -149,8 +182,6 @@ def ctrl_shift_down_global() -> bool:
 
 class OverlayApp:
     def __init__(self, schedule_path: str):
-        print("Using schedule:", schedule_path)
-
         self.items = load_schedule(schedule_path)
 
         self.root = tk.Tk()
@@ -158,29 +189,36 @@ class OverlayApp:
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
 
-        # Key color for transparency
-        self.key_color = "#01F1FE"
+        # Use known-good magenta key for transparency
+        self.key_color = "#ff00ff"
         self.root.configure(bg=self.key_color)
 
-        # Visible defaults so you can tell labels are painting
         self.title_var = tk.StringVar(value="Loading…")
         self.time_var = tk.StringVar(value="0:00:00")
 
         self.title_lbl = tk.Label(
-            self.root, textvariable=self.title_var,
-            fg="white", bg=self.key_color,
+            self.root,
+            textvariable=self.title_var,
+            fg="white",
+            bg=self.key_color,
             font=("Segoe UI", 18, "bold"),
-            bd=0, highlightthickness=0,
-            padx=10, pady=2
+            bd=0,
+            highlightthickness=0,
+            padx=10,
+            pady=2
         )
         self.title_lbl.pack(fill="both")
 
         self.time_lbl = tk.Label(
-            self.root, textvariable=self.time_var,
-            fg="white", bg=self.key_color,
+            self.root,
+            textvariable=self.time_var,
+            fg="white",
+            bg=self.key_color,
             font=("Consolas", 34, "bold"),
-            bd=0, highlightthickness=0,
-            padx=10, pady=0
+            bd=0,
+            highlightthickness=0,
+            padx=10,
+            pady=0
         )
         self.time_lbl.pack(fill="both")
 
@@ -193,48 +231,28 @@ class OverlayApp:
         self._drag_off_x = 0
         self._drag_off_y = 0
 
+        # Mouse bindings (only “work” when CTRL+SHIFT is held, because otherwise hit-test is transparent)
         self.root.bind("<ButtonPress-1>", self._on_left_down)
         self.root.bind("<B1-Motion>", self._on_left_drag)
         self.root.bind("<ButtonRelease-1>", self._on_left_up)
         self.root.bind("<ButtonPress-3>", self._on_right_down)
+
         self.root.bind("<Escape>", lambda e: self.root.destroy())
 
         self._place_top_right(20, 20)
 
-        # Realize window first
+        # Realize window then apply transparentcolor
         self.root.update()
 
-        # Apply transparency (try both spellings)
-        applied = False
-        for fn in (self.root.wm_attributes, self.root.attributes):
-            try:
-                fn("-transparentcolor", self.key_color)
-                applied = True
-                break
-            except tk.TclError as e:
-                print("transparentcolor failed on:", fn.__name__, e)
+        # Apply Tk color-key transparency
+        self.root.wm_attributes("-transparentcolor", self.key_color)
 
-        if not applied:
-            # fallback
-            try:
-                self.root.attributes("-alpha", 0.92)
-            except tk.TclError:
-                pass
-
+        # Install hit-test click-through (no WS_EX_TRANSPARENT!)
         self.hwnd = self.root.winfo_id()
-        self._clickthrough_enabled = None
+        self._hit_test = WinClickThroughByHitTest(self.hwnd)
 
-        # Start click-through by default
-        self._set_clickthrough(True)
-
-        # Start loop
+        # Start ticking
         self._tick()
-
-    def _set_clickthrough(self, enable: bool):
-        if self._clickthrough_enabled is enable:
-            return
-        set_clickthrough(self.hwnd, enable=enable)
-        self._clickthrough_enabled = enable
 
     def _place_top_right(self, mx: int, my: int):
         self.root.update_idletasks()
@@ -244,7 +262,6 @@ class OverlayApp:
         y = my
         self.root.geometry(f"+{x}+{y}")
 
-    # Mouse handlers (only work when click-through is disabled)
     def _on_left_down(self, e):
         if not ctrl_shift_down_global():
             return
@@ -271,25 +288,10 @@ class OverlayApp:
             self.menu.grab_release()
 
     def _tick(self):
-        try:
-            # Toggle click-through based on global CTRL+SHIFT
-            interactive = ctrl_shift_down_global()
-            self._set_clickthrough(enable=not interactive)
-
-            now = datetime.now()
-            title, timer = compute_display(self.items, now)
-            self.title_var.set(title)
-            self.time_var.set("" if timer is None else timer)
-
-        except Exception:
-            err = traceback.format_exc()
-            print(err)
-            # Show a short hint on-screen; full stack trace is in console
-            self.title_var.set("ERROR (see console)")
-            # last line of traceback is usually the exception message
-            self.time_var.set(err.strip().splitlines()[-1])
-
-        # Always reschedule, even if there was an error
+        now = datetime.now()
+        title, timer = compute_display(self.items, now)
+        self.title_var.set(title)
+        self.time_var.set("" if timer is None else timer)
         self.root.after(200, self._tick)
 
     def run(self):
