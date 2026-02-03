@@ -313,7 +313,6 @@ class OverlayApp:
 
         self.title_font.configure(size=title_size)
         self.time_font.configure(size=time_size)
-
         self.title_lbl.configure(padx=padx, pady=title_pady)
         self.time_lbl.configure(padx=padx, pady=time_pady)
 
@@ -409,104 +408,103 @@ class OverlayApp:
             self._drag_off_y = self.root.winfo_pointery() - y
 
     def _on_left_drag(self, _e):
+        # If user releases CTRL+SHIFT mid-drag, cancel the gesture.
         if not ctrl_shift_down_global():
-            # If user releases keys mid-drag, stop the gesture
             self._mode = None
             self._resize_dir = None
+            self._dragging = False
             return
 
+        # ----------------------------
+        # MOVE
+        # ----------------------------
         if self._mode == "move":
             x = self.root.winfo_pointerx() - self._drag_off_x
             y = self.root.winfo_pointery() - self._drag_off_y
             self.root.geometry(f"+{x}+{y}")
             return
 
+        # ----------------------------
+        # RESIZE (scale-only + snap)
+        # ----------------------------
         if self._mode != "resize" or not self._resize_dir:
             return
 
-        # Compute mouse delta in screen coords
+        # Current mouse deltas (screen coords)
         mx = self.root.winfo_pointerx()
         my = self.root.winfo_pointery()
         dx = mx - self._start_mouse_x
         dy = my - self._start_mouse_y
 
-        # Start from initial geometry
+        # Starting window geometry
         x0, y0, w0, h0 = self._start_x, self._start_y, self._start_w, self._start_h
-        aspect = self._aspect
+        if w0 <= 0 or h0 <= 0:
+            return
 
-        # Propose new w/h based on which edge is being dragged
-        # Then convert to a uniform scale to preserve aspect ratio.
-        # For corners: use the larger relative change to feel natural.
+        # Keep edges anchored depending on direction
+        right_edge = x0 + w0
+        bottom_edge = y0 + h0
+
+        # Propose new w/h based on drag direction
         proposed_w = w0
         proposed_h = h0
 
-        dir_ = self._resize_dir
-
-        if "r" in dir_:
+        d = self._resize_dir
+        if "r" in d:
             proposed_w = w0 + dx
-        if "l" in dir_:
+        if "l" in d:
             proposed_w = w0 - dx
-        if "b" in dir_:
+        if "b" in d:
             proposed_h = h0 + dy
-        if "t" in dir_:
+        if "t" in d:
             proposed_h = h0 - dy
 
-        # Derive uniform scale
-        # If only width edge: scale from width. If only height edge: scale from height.
-        # If corner: pick whichever movement implies larger scale change.
-        scale_w = proposed_w / w0 if w0 else 1.0
-        scale_h = proposed_h / h0 if h0 else 1.0
+        # Convert proposed change into a uniform scale factor.
+        # - For left/right edges: scale from width
+        # - For top/bottom edges: scale from height
+        # - For corners: use whichever implies a larger magnitude change
+        scale_w = proposed_w / w0
+        scale_h = proposed_h / h0
 
-        if dir_ in ("l", "r"):
+        if d in ("l", "r"):
             s = scale_w
-        elif dir_ in ("t", "b"):
+        elif d in ("t", "b"):
             s = scale_h
         else:
-            # corner
+            # corner resize
             s = scale_w if abs(scale_w - 1.0) >= abs(scale_h - 1.0) else scale_h
 
-        # Apply clamp in terms of overall scale (relative to current global scale)
+        # Apply to starting scale and clamp
         new_scale = self._start_scale * s
         new_scale = max(self.min_scale, min(self.max_scale, new_scale))
 
-        # Convert back into w/h based on starting w/h and the *actual* scale ratio we applied
-        applied_ratio = new_scale / self._start_scale if self._start_scale else 1.0
-        w = int(round(w0 * applied_ratio))
-        h = int(round(h0 * applied_ratio))
-
-        # Preserve aspect exactly (avoid drift)
-        # Force h from w/aspect (or w from h*aspect depending on stability)
-        if aspect > 0:
-            h = int(round(w / aspect))
-
-        # Clamp absolute min/max as a second guard (optional)
-        # You can tune these if you prefer hard bounds in pixels
-        min_w, min_h = 220, 90
-        max_w, max_h = 1200, 600
-        if w < min_w:
-            w = min_w
-            h = int(round(w / aspect))
-        if h < min_h:
-            h = min_h
-            w = int(round(h * aspect))
-        if w > max_w:
-            w = max_w
-            h = int(round(w / aspect))
-        if h > max_h:
-            h = max_h
-            w = int(round(h * aspect))
-
-        # Adjust x/y if resizing from left/top so the opposite edge stays anchored
-        x = x0
-        y = y0
-        if "l" in dir_:
-            x = x0 + (w0 - w)
-        if "t" in dir_:
-            y = y0 + (h0 - h)
-
-        # Apply scale to fonts/padding first, then force window size.
+        # Apply visual scaling (fonts/padding)
         self._apply_scale(new_scale)
-        self.root.geometry(f"{w}x{h}+{x}+{y}")
+
+        # Snap window size to content at this scale
+        # (this is what prevents the giant black box issue)
+        self._snap_to_content(anchor="topleft")
+
+        # Re-anchor edges when resizing from left/top so it feels natural:
+        # keep the "opposite edge" fixed.
+        self.root.update_idletasks()
+        new_w = self.root.winfo_width()
+        new_h = self.root.winfo_height()
+        new_x = self.root.winfo_x()
+        new_y = self.root.winfo_y()
+
+        if "l" in d:
+            new_x = right_edge - new_w
+        else:
+            new_x = x0
+
+        if "t" in d:
+            new_y = bottom_edge - new_h
+        else:
+            new_y = y0
+
+        self.root.geometry(f"+{new_x}+{new_y}")
+
 
     def _on_left_up(self, _e):
         self._mode = None
@@ -579,6 +577,39 @@ class OverlayApp:
         return px, py
 
 
+    def _snap_to_content(self, *, anchor: str = "topleft"):
+        """
+        Resize the window to exactly fit its content at the current scale.
+        anchor: 'topleft' (default), 'center', 'topright'
+        """
+        self.root.update_idletasks()
+
+        req_w = self.root.winfo_reqwidth()
+        req_h = self.root.winfo_reqheight()
+
+        # Hard clamps (tune as you like)
+        min_w, min_h = 220, 90
+        max_w, max_h = 1200, 600
+        w = max(min_w, min(max_w, req_w))
+        h = max(min_h, min(max_h, req_h))
+
+        x = self.root.winfo_x()
+        y = self.root.winfo_y()
+        cur_w = self.root.winfo_width()
+        cur_h = self.root.winfo_height()
+
+        if anchor == "center":
+            x = x + (cur_w - w) // 2
+            y = y + (cur_h - h) // 2
+        elif anchor == "topright":
+            x = x + (cur_w - w)
+
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
+
+        # Update aspect so future resizes remain consistent with content shape
+        if h > 0:
+            self._aspect = w / h
+
     # ----------------------------
     # Main update loop
     # ----------------------------
@@ -592,6 +623,9 @@ class OverlayApp:
         title, timer = compute_display(self.items, now)
         self.title_var.set(title)
         self.time_var.set("" if timer is None else timer)
+
+        if self._mode is None:
+            self._snap_to_content(anchor="topleft")
 
         self.root.after(200, self._tick)
 
