@@ -259,6 +259,12 @@ class OverlayApp:
         self.root.bind("<ButtonPress-3>", self._on_right_down)
         self.root.bind("<Escape>", lambda e: self.root.destroy())
 
+        # Cursor feedback while in grab mode (CTRL+SHIFT held)
+        for w in (self.root, self.title_lbl, self.time_lbl):
+            w.bind("<Motion>", self._on_motion_update_cursor)
+            w.bind("<Leave>", self._on_leave_reset_cursor)
+
+
         # Place & realize
         self._place_top_right(20, 20)
         self.root.update()
@@ -313,6 +319,12 @@ class OverlayApp:
         self.root.configure(bg=bg)
         self.title_lbl.configure(bg=bg)
         self.time_lbl.configure(bg=bg)
+        
+        if grab:
+            self._set_cursor("fleur")
+        else:
+            self._set_cursor("")
+
 
     # ----------------------------
     # Position helpers
@@ -498,6 +510,55 @@ class OverlayApp:
             self.menu.tk_popup(self.root.winfo_pointerx(), self.root.winfo_pointery())
         finally:
             self.menu.grab_release()
+
+    # ----------------------------
+    # Mouse Symbols
+    # ----------------------------
+
+    def _set_cursor(self, cursor: str):
+        """Set cursor on root + labels so it works over the whole box."""
+        self.root.configure(cursor=cursor)
+        self.title_lbl.configure(cursor=cursor)
+        self.time_lbl.configure(cursor=cursor)
+
+    def _cursor_for_region(self, region: Optional[str]) -> str:
+        """
+        Map our resize region to Tk cursor names.
+        Return '' for default cursor.
+        """
+        if region is None:
+            return "fleur"  # move cursor (pan) when inside box
+
+        # Corners
+        if region in ("lt", "rb"):
+            return "size_nw_se"
+        if region in ("rt", "lb"):
+            return "size_ne_sw"
+
+        # Edges
+        if region in ("l", "r"):
+            return "size_we"
+        if region in ("t", "b"):
+            return "size_ns"
+
+        return "fleur"
+
+    def _on_motion_update_cursor(self, e):
+        # Only show special cursors while CTRL+SHIFT is held
+        if not ctrl_shift_down_global():
+            self._set_cursor("")  # default
+            return
+
+        # Determine which region the pointer is in relative to the window
+        x, y, w, h = self._window_geom()
+        region = self._hit_region(x, y, w, h, e.x, e.y)
+        self._set_cursor(self._cursor_for_region(region))
+
+    def _on_leave_reset_cursor(self, _e):
+        # When leaving the box, restore default unless still in grab mode
+        if not ctrl_shift_down_global():
+            self._set_cursor("")
+
 
     # ----------------------------
     # Main update loop
