@@ -319,7 +319,7 @@ class OverlayApp:
         self.root.configure(bg=bg)
         self.title_lbl.configure(bg=bg)
         self.time_lbl.configure(bg=bg)
-        
+
         if grab:
             self._set_cursor("fleur")
         else:
@@ -343,7 +343,7 @@ class OverlayApp:
         self.root.update_idletasks()
         return (self.root.winfo_x(), self.root.winfo_y(), self.root.winfo_width(), self.root.winfo_height())
 
-    def _hit_region(self, x: int, y: int, w: int, h: int, px: int, py: int) -> Optional[str]:
+    def _hit_region(self, w: int, h: int, px: int, py: int) -> Optional[str]:
         """
         Determine resize direction based on pointer inside window client area.
         Returns one of: l,r,t,b,lt,rt,lb,rb or None if not in resize margin.
@@ -354,22 +354,14 @@ class OverlayApp:
         top = py <= m
         bottom = py >= h - m
 
-        if top and left:
-            return "lt"
-        if top and right:
-            return "rt"
-        if bottom and left:
-            return "lb"
-        if bottom and right:
-            return "rb"
-        if left:
-            return "l"
-        if right:
-            return "r"
-        if top:
-            return "t"
-        if bottom:
-            return "b"
+        if top and left: return "lt"
+        if top and right: return "rt"
+        if bottom and left: return "lb"
+        if bottom and right: return "rb"
+        if left: return "l"
+        if right: return "r"
+        if top: return "t"
+        if bottom: return "b"
         return None
 
     # ----------------------------
@@ -389,15 +381,18 @@ class OverlayApp:
 
         # Choose resize vs move
         # Only allow resizing when in grab mode (black background), which is when CTRL+SHIFT is held
-        region = self._hit_region(x, y, w, h, e.x, e.y)
+        px, py = self._pointer_in_root()
+        region = self._hit_region(w, h, px, py)
+
         if region:
             self._mode = "resize"
             self._resize_dir = region
         else:
             self._mode = "move"
             self._resize_dir = None
-            self._drag_off_x = e.x
-            self._drag_off_y = e.y
+            # store offset from window top-left in screen coords
+            self._drag_off_x = self.root.winfo_pointerx() - x
+            self._drag_off_y = self.root.winfo_pointery() - y
 
     def _on_left_drag(self, _e):
         if not ctrl_shift_down_global():
@@ -546,18 +541,28 @@ class OverlayApp:
     def _on_motion_update_cursor(self, e):
         # Only show special cursors while CTRL+SHIFT is held
         if not ctrl_shift_down_global():
-            self._set_cursor("")  # default
+            self._set_cursor("")
             return
 
         # Determine which region the pointer is in relative to the window
-        x, y, w, h = self._window_geom()
-        region = self._hit_region(x, y, w, h, e.x, e.y)
+        self.root.update_idletasks()
+        w = self.root.winfo_width()
+        h = self.root.winfo_height()
+        px, py = self._pointer_in_root()
+
+        region = self._hit_region(w, h, px, py)
         self._set_cursor(self._cursor_for_region(region))
 
     def _on_leave_reset_cursor(self, _e):
         # When leaving the box, restore default unless still in grab mode
         if not ctrl_shift_down_global():
             self._set_cursor("")
+
+    def _pointer_in_root(self) -> tuple[int, int]:
+        """Pointer position in *root window* coordinates (0..w, 0..h)."""
+        px = self.root.winfo_pointerx() - self.root.winfo_rootx()
+        py = self.root.winfo_pointery() - self.root.winfo_rooty()
+        return px, py
 
 
     # ----------------------------
