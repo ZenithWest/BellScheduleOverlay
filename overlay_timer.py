@@ -189,6 +189,9 @@ class OverlayApp:
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
 
+        # Track current visual mode so we only update when it changes
+        self._grab_mode = False  # False = transparent mode, True = black background mode
+
         # Use known-good magenta key for transparency
         self.key_color = "#ff00ff"
         self.root.configure(bg=self.key_color)
@@ -254,6 +257,27 @@ class OverlayApp:
         # Start ticking
         self._tick()
 
+    def _set_grab_mode(self, grab: bool):
+        """
+        grab=False => transparent background (magenta key color)
+        grab=True  => opaque black background (easier to drag)
+        """
+        if self._grab_mode == grab:
+            return
+        self._grab_mode = grab
+
+        bg = "black" if grab else self.key_color
+
+        # Window + labels backgrounds
+        self.root.configure(bg=bg)
+        self.title_lbl.configure(bg=bg)
+        self.time_lbl.configure(bg=bg)
+
+        # Optional: add a little padding/outline feel in grab mode
+        # (Uncomment if you want it slightly larger/easier to grab)
+        # self.title_lbl.configure(padx=14 if grab else 10, pady=6 if grab else 2)
+        # self.time_lbl.configure(padx=14 if grab else 10, pady=4 if grab else 0)
+
     def _place_top_right(self, mx: int, my: int):
         self.root.update_idletasks()
         sw = self.root.winfo_screenwidth()
@@ -289,9 +313,14 @@ class OverlayApp:
 
     def _tick(self):
         now = datetime.now()
+
+        grab = ctrl_shift_down_global()  # CTRL+SHIFT held?
+        self._set_grab_mode(grab)
+
         title, timer = compute_display(self.items, now)
         self.title_var.set(title)
         self.time_var.set("" if timer is None else timer)
+
         self.root.after(200, self._tick)
 
     def run(self):
