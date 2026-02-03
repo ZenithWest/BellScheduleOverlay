@@ -244,6 +244,23 @@ class OverlayApp:
         )
         self.time_lbl.pack(fill="both")
 
+
+        # Help text shown only in grab mode (CTRL+SHIFT)
+        self.help_var = tk.StringVar(value="CTRL+SHIFT+RightClick to close!")
+        self.help_lbl = tk.Label(
+            self.root,
+            textvariable=self.help_var,
+            fg="yellow",
+            bg=self.key_color,
+            font=("Segoe UI", 11, "bold"),
+            bd=0,
+            highlightthickness=0,
+            padx=6,
+            pady=2
+        )
+        # DO NOT pack yet — we control visibility dynamically
+
+
         # Context menu
         self.menu = tk.Menu(self.root, tearoff=0)
         self.menu.add_command(label="Close", command=self.root.destroy)
@@ -329,13 +346,19 @@ class OverlayApp:
         self._grab_mode = grab
 
         bg = "black" if grab else self.key_color
+
         self.root.configure(bg=bg)
         self.title_lbl.configure(bg=bg)
         self.time_lbl.configure(bg=bg)
+        self.help_lbl.configure(bg=bg)
 
         if grab:
+            # Show helper text at the bottom
+            self.help_lbl.pack(fill="x", pady=(2, 4))
             self._set_cursor("fleur")
         else:
+            # Hide helper text
+            self.help_lbl.pack_forget()
             self._set_cursor("")
 
 
