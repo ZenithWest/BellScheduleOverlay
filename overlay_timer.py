@@ -211,7 +211,7 @@ class OverlayApp:
         # --- scalable style (base values at scale=1.0) ---
         self.scale = 1.0
         self.min_scale = 0.60
-        self.max_scale = 3.00
+        self.max_scale = 10.00
 
         self.base_title_size = 18
         self.base_time_size = 34
@@ -589,7 +589,7 @@ class OverlayApp:
 
         # Hard clamps (tune as you like)
         min_w, min_h = 220, 90
-        max_w, max_h = 1200, 600
+        max_w, max_h = 1800, 900
         w = max(min_w, min(max_w, req_w))
         h = max(min_h, min(max_h, req_h))
 
