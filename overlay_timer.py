@@ -5,6 +5,7 @@ import tkinter as tk
 from dataclasses import dataclass
 from datetime import datetime, date, time, timedelta
 from typing import Optional, List, Tuple
+import traceback
 
 # ----------------------------
 # Schedule parsing
@@ -99,7 +100,6 @@ def is_windows() -> bool:
     return platform.system().lower() == "windows"
 
 def set_clickthrough(hwnd: int, enable: bool) -> None:
-    """enable=True => mouse clicks pass through; False => window receives mouse."""
     if not is_windows():
         return
     try:
@@ -129,7 +129,7 @@ def set_clickthrough(hwnd: int, enable: bool) -> None:
         pass
 
 def ctrl_shift_down_global() -> bool:
-    """Detect CTRL+SHIFT globally (works even if overlay is not focused)."""
+    """Global CTRL+SHIFT state (does not require focus)."""
     if not is_windows():
         return False
     try:
@@ -137,7 +137,6 @@ def ctrl_shift_down_global() -> bool:
         user32 = ctypes.windll.user32
         VK_CONTROL = 0x11
         VK_SHIFT = 0x10
-        # high bit set when key is down
         ctrl = (user32.GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0
         shift = (user32.GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0
         return ctrl and shift
@@ -150,6 +149,8 @@ def ctrl_shift_down_global() -> bool:
 
 class OverlayApp:
     def __init__(self, schedule_path: str):
+        print("Using schedule:", schedule_path)
+
         self.items = load_schedule(schedule_path)
 
         self.root = tk.Tk()
@@ -157,40 +158,33 @@ class OverlayApp:
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
 
-        # Color key for transparency (choose something very unlikely)
-        self.key_color = self.transparent_color = "#ff00ff"
+        # Key color for transparency
+        self.key_color = "#01F1FE"
         self.root.configure(bg=self.key_color)
 
-        self.title_var = tk.StringVar(value="")
-        self.time_var = tk.StringVar(value="")
+        # Visible defaults so you can tell labels are painting
+        self.title_var = tk.StringVar(value="Loading…")
+        self.time_var = tk.StringVar(value="0:00:00")
 
         self.title_lbl = tk.Label(
-            self.root,
-            textvariable=self.title_var,
-            fg="white",
-            bg=self.key_color,
+            self.root, textvariable=self.title_var,
+            fg="white", bg=self.key_color,
             font=("Segoe UI", 18, "bold"),
-            bd=0,
-            highlightthickness=0,
-            padx=10,
-            pady=2
+            bd=0, highlightthickness=0,
+            padx=10, pady=2
         )
-        self.title_lbl.pack(fill="both")  # fill prevents "cyan sliver" gaps
+        self.title_lbl.pack(fill="both")
 
         self.time_lbl = tk.Label(
-            self.root,
-            textvariable=self.time_var,
-            fg="white",
-            bg=self.key_color,
+            self.root, textvariable=self.time_var,
+            fg="white", bg=self.key_color,
             font=("Consolas", 34, "bold"),
-            bd=0,
-            highlightthickness=0,
-            padx=10,
-            pady=0
+            bd=0, highlightthickness=0,
+            padx=10, pady=0
         )
         self.time_lbl.pack(fill="both")
 
-        # Context menu
+        # Menu
         self.menu = tk.Menu(self.root, tearoff=0)
         self.menu.add_command(label="Close", command=self.root.destroy)
 
@@ -199,43 +193,48 @@ class OverlayApp:
         self._drag_off_x = 0
         self._drag_off_y = 0
 
-        # Mouse bindings (work when click-through is disabled)
         self.root.bind("<ButtonPress-1>", self._on_left_down)
         self.root.bind("<B1-Motion>", self._on_left_drag)
         self.root.bind("<ButtonRelease-1>", self._on_left_up)
         self.root.bind("<ButtonPress-3>", self._on_right_down)
-
-        # Backup close
         self.root.bind("<Escape>", lambda e: self.root.destroy())
 
-        # Initial placement
         self._place_top_right(20, 20)
 
-        # IMPORTANT: realize window, then apply transparentcolor
-        self.root.update()  # ensure HWND exists and window is mapped
+        # Realize window first
+        self.root.update()
 
-        # Apply transparency key (try both attribute spellings)
+        # Apply transparency (try both spellings)
         applied = False
         for fn in (self.root.wm_attributes, self.root.attributes):
             try:
                 fn("-transparentcolor", self.key_color)
                 applied = True
                 break
-            except tk.TclError:
-                continue
+            except tk.TclError as e:
+                print("transparentcolor failed on:", fn.__name__, e)
 
         if not applied:
-            # Fallback: whole-window translucency (not ideal, but avoids black box)
+            # fallback
             try:
                 self.root.attributes("-alpha", 0.92)
             except tk.TclError:
                 pass
 
         self.hwnd = self.root.winfo_id()
-        self._clickthrough_enabled = None  # unknown initially
+        self._clickthrough_enabled = None
 
-        # Start ticking
+        # Start click-through by default
+        self._set_clickthrough(True)
+
+        # Start loop
         self._tick()
+
+    def _set_clickthrough(self, enable: bool):
+        if self._clickthrough_enabled is enable:
+            return
+        set_clickthrough(self.hwnd, enable=enable)
+        self._clickthrough_enabled = enable
 
     def _place_top_right(self, mx: int, my: int):
         self.root.update_idletasks()
@@ -245,15 +244,8 @@ class OverlayApp:
         y = my
         self.root.geometry(f"+{x}+{y}")
 
-    def _set_clickthrough_if_needed(self, enable: bool):
-        if self._clickthrough_enabled is enable:
-            return
-        set_clickthrough(self.hwnd, enable=enable)
-        self._clickthrough_enabled = enable
-
-    # Mouse handlers
+    # Mouse handlers (only work when click-through is disabled)
     def _on_left_down(self, e):
-        # Only allow drag while CTRL+SHIFT is held (we disable click-through during that)
         if not ctrl_shift_down_global():
             return
         self._dragging = True
@@ -279,24 +271,31 @@ class OverlayApp:
             self.menu.grab_release()
 
     def _tick(self):
-        # Global CTRL+SHIFT toggles click-through:
-        # - held => interactive (can drag / menu)
-        # - not held => click-through
-        interactive = ctrl_shift_down_global()
-        self._set_clickthrough_if_needed(enable=not interactive)
+        try:
+            # Toggle click-through based on global CTRL+SHIFT
+            interactive = ctrl_shift_down_global()
+            self._set_clickthrough(enable=not interactive)
 
-        now = datetime.now()
-        title, timer = compute_display(self.items, now)
-        self.title_var.set(title)
-        self.time_var.set("" if timer is None else timer)
+            now = datetime.now()
+            title, timer = compute_display(self.items, now)
+            self.title_var.set(title)
+            self.time_var.set("" if timer is None else timer)
 
+        except Exception:
+            err = traceback.format_exc()
+            print(err)
+            # Show a short hint on-screen; full stack trace is in console
+            self.title_var.set("ERROR (see console)")
+            # last line of traceback is usually the exception message
+            self.time_var.set(err.strip().splitlines()[-1])
+
+        # Always reschedule, even if there was an error
         self.root.after(200, self._tick)
 
     def run(self):
         self.root.mainloop()
 
 def default_schedule_path() -> str:
-    # Same folder as the script (Windows path)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(script_dir, "Bell-Schedule.txt")
 
@@ -304,7 +303,7 @@ def main():
     schedule_path = sys.argv[1] if len(sys.argv) > 1 else default_schedule_path()
     if not os.path.exists(schedule_path):
         print(f"Schedule file not found: {schedule_path}")
-        print("Put Bell-Schedule.txt next to overlay_timer.py (or pass a path as argv[1]).")
+        print("Put Bell-Schedule.txt next to overlay_timer.py or pass its path as argv[1].")
         sys.exit(1)
 
     OverlayApp(schedule_path).run()
