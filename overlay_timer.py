@@ -261,7 +261,7 @@ class OverlayApp:
             bd=0, highlightthickness=0
         )
         self.title_lbl.pack(fill="both")
-        
+
 
         self.gap_frame = tk.Frame(self.root, bg=self.key_color, height=0, bd=0, highlightthickness=0)
         self.gap_frame.pack(fill="x")
@@ -682,8 +682,33 @@ class OverlayApp:
 
         x = (win_w - sub_w) // 2
 
-        self.sub_lbl.place(x=x, y=y)
+        self.sub_lbl.place(in_=self.gap_frame, relx=0.5, rely=0.5, anchor="center")
         self.sub_lbl.lift()
+
+    def _update_subtitle_layout(self, subtitle: str | None):
+        if not subtitle:
+            self.sub_lbl.place_forget()
+            self.gap_frame.configure(height=0)
+            self._sub_size_current = None
+            return
+
+        # Ensure the font size is correct for current scale (and shrink-to-fit-gap if you’re using it)
+        # If you want gap-driven shrinking:
+        # desired gap can be based on current subtitle font height.
+
+        self.root.update_idletasks()
+
+        sub_h = self.sub_font.metrics("linespace")
+        target_gap = sub_h + 4  # breathing room
+
+        self.gap_frame.configure(height=target_gap)
+        self.root.update_idletasks()
+
+        # Now show it centered in the gap frame (smooth)
+        if not self.sub_lbl.winfo_ismapped():
+            self.sub_lbl.place(in_=self.gap_frame, relx=0.5, rely=0.5, anchor="center")
+            self.sub_lbl.lift()
+
 
     def _subtitle_pixel_size(self, text: str) -> tuple[int, int]:
         """
@@ -969,6 +994,7 @@ class OverlayApp:
 
         if subtitle:
             self.sub_var.set(subtitle)
+            self._update_subtitle_layout(subtitle)
 
             # Choose an initial subtitle font size from your scaled default
             desired = max(self.sub_min_size, int(round(self.sub_font_base_size * self.scale * self.sub_ratio)))
@@ -999,10 +1025,11 @@ class OverlayApp:
             y = max(0, (gap_px - sub_h) // 2)
 
             # Place relative to gap_frame (not root)
-            self.sub_lbl.place(in_=self.gap_frame, x=x, y=y, width=sub_w, height=sub_h)
+            self.sub_lbl.place(in_=self.gap_frame, relx=0.5, rely=0.5, anchor="center")
             self.sub_lbl.lift()
         else:
             self.sub_var.set("")
+            self._update_subtitle_layout(None)
             self.sub_lbl.place_forget()
             self.gap_frame.configure(height=0)  # collapse the gap when no subtitle
             self._sub_size_current = None
