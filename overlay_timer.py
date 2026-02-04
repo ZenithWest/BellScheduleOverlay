@@ -261,6 +261,11 @@ class OverlayApp:
             bd=0, highlightthickness=0
         )
         self.title_lbl.pack(fill="both")
+        
+
+        self.gap_frame = tk.Frame(self.root, bg=self.key_color, height=0, bd=0, highlightthickness=0)
+        self.gap_frame.pack(fill="x")
+        self.gap_frame.pack_propagate(False)  # keep exact height (don't shrink to contents)
 
         self.time_lbl = tk.Label(
             self.root, textvariable=self.time_var,
@@ -269,15 +274,16 @@ class OverlayApp:
             bd=0, highlightthickness=0
         )
         self.time_lbl.pack(fill="both")
-
         self._last_title = ""
         self._last_time = ""
 
         # Subtitle (used for "A → B" during transitions)
         self.sub_var = tk.StringVar(value="")
-        self.sub_font_base_size = 12          # base at scale=1.0
-        self.sub_ratio = 0.75                 # smaller than title
-        self.sub_min_size = 8
+        self.sub_font_base_size = 12     # your normal subtitle size at scale=1
+        self.sub_ratio = 0.75            # scales smaller than title
+        self.sub_min_size = 7
+        self._sub_size_current = None    # will track last applied size (for stability)
+
 
         self.sub_font = tkfont.Font(family="Segoe UI", size=self.sub_font_base_size, weight="bold")
 
@@ -449,6 +455,7 @@ class OverlayApp:
             self.title_lbl.configure(bg=bg)
             self.time_lbl.configure(bg=bg)
             self.help_lbl.configure(bg=bg)
+            self.gap_frame.configure(bg=bg)
             self.sub_lbl.configure(bg=bg)
 
             # Disable color-key visually by not painting it
@@ -472,6 +479,7 @@ class OverlayApp:
             self.title_lbl.configure(bg=bg)
             self.time_lbl.configure(bg=bg)
             self.help_lbl.configure(bg=bg)
+            self.gap_frame.configure(bg=bg)
             self.sub_lbl.configure(bg=bg)
 
             # Restore full opacity
@@ -549,6 +557,60 @@ class OverlayApp:
         # Otherwise: stay put (prevents rapid flipping)
         self.help_font.configure(size=cur_size)
 
+    def _fit_subtitle_to_gap(self, gap_px: int) -> int:
+        """
+        Returns a subtitle font size (int) that fits within gap_px vertically.
+        Stable: only shrinks when needed; grows back slowly only when there's room.
+        """
+        # Start from the "desired" size at current scale
+        desired = int(round(self.sub_font_base_size * self.scale * self.sub_ratio))
+        desired = max(self.sub_min_size, desired)
+
+        # Current size (cached)
+        cur = self._sub_size_current
+        if cur is None:
+            cur = desired
+
+        # How tall is current font?
+        self.sub_font.configure(size=cur)
+        cur_h = self.sub_font.metrics("linespace")
+
+        # Deadbands (hysteresis) to prevent flip-flop
+        SHRINK_EPS = 0   # shrink immediately if it doesn't fit
+        GROW_EPS = 6     # only grow if we have at least 6px extra headroom
+
+        # If it doesn't fit, shrink until it fits
+        if cur_h > gap_px - SHRINK_EPS:
+            s = cur
+            while s > self.sub_min_size:
+                s -= 1
+                self.sub_font.configure(size=s)
+                if self.sub_font.metrics("linespace") <= gap_px:
+                    self._sub_size_current = s
+                    return s
+            self._sub_size_current = self.sub_min_size
+            return self.sub_min_size
+
+        # If it fits and we are below desired, maybe grow — but only if there's plenty of room
+        if cur < desired:
+            # check if we have enough headroom to try growing
+            if (gap_px - cur_h) >= GROW_EPS:
+                s = cur
+                while s < desired:
+                    next_s = s + 1
+                    self.sub_font.configure(size=next_s)
+                    if self.sub_font.metrics("linespace") <= gap_px:
+                        s = next_s
+                        continue
+                    break
+                self._sub_size_current = s
+                self.sub_font.configure(size=s)
+                return s
+
+        # Otherwise keep current size
+        self._sub_size_current = cur
+        self.sub_font.configure(size=cur)
+        return cur
 
 
     # ----------------------------
@@ -908,35 +970,44 @@ class OverlayApp:
         if subtitle:
             self.sub_var.set(subtitle)
 
-            # Ensure geometry is up to date for title/timer positions
+            # Choose an initial subtitle font size from your scaled default
+            desired = max(self.sub_min_size, int(round(self.sub_font_base_size * self.scale * self.sub_ratio)))
+            self.sub_font.configure(size=desired)
+
             self.root.update_idletasks()
 
-            # Compute vertical gap
-            title_y = self.title_lbl.winfo_y()
-            title_h = self.title_lbl.winfo_height()
-            timer_y = self.time_lbl.winfo_y()
+            # Available vertical space is the gap frame height, so we control it.
+            # First, compute the subtitle height at current font:
+            sub_h = self.sub_font.metrics("linespace")
 
-            gap_top = title_y + title_h
-            gap_bottom = timer_y
+            # Add a little breathing room
+            target_gap = sub_h + 4
 
-            sub_w, sub_h = self._subtitle_pixel_size(subtitle)
+            # Set gap height so subtitle has space
+            self.gap_frame.configure(height=target_gap)
+            self.root.update_idletasks()
 
-            # Choose y centered in the gap (fallback if gap is tiny)
-            if gap_bottom - gap_top < sub_h:
-                y = gap_top
-            else:
-                y = gap_top + (gap_bottom - gap_top - sub_h) // 2
+            # Now "shrink-to-fit-gap" if needed (rare, but safe)
+            gap_px = self.gap_frame.winfo_height()
+            self._fit_subtitle_to_gap(gap_px)  # your existing method
+            sub_h = self.sub_font.metrics("linespace")
+            sub_w = self.sub_font.measure(subtitle)
 
-            # Center horizontally in the window
-            win_w = self.root.winfo_width()
-            x = (win_w - sub_w) // 2
+            # Center subtitle inside the gap frame using place()
+            gap_w = self.gap_frame.winfo_width()
+            x = max(0, (gap_w - sub_w) // 2)
+            y = max(0, (gap_px - sub_h) // 2)
 
-            # Place ONCE at the final location (no visible jump)
-            self.sub_lbl.place(x=x, y=y, width=sub_w, height=sub_h)
+            # Place relative to gap_frame (not root)
+            self.sub_lbl.place(in_=self.gap_frame, x=x, y=y, width=sub_w, height=sub_h)
             self.sub_lbl.lift()
         else:
             self.sub_var.set("")
             self.sub_lbl.place_forget()
+            self.gap_frame.configure(height=0)  # collapse the gap when no subtitle
+            self._sub_size_current = None
+
+
 
 
 
