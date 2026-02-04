@@ -279,12 +279,18 @@ class OverlayApp:
 
         # Help text shown only in grab mode (CTRL+SHIFT)
         self.help_var = tk.StringVar(value="CTRL+SHIFT+RightClick for Menu!")
+        self.help_font_base_size = 11
+        self.help_font = tkfont.Font(
+            family="Segoe UI",
+            size=self.help_font_base_size,
+            weight="bold"
+        )
         self.help_lbl = tk.Label(
             self.root,
             textvariable=self.help_var,
             fg="yellow",
             bg=self.key_color,
-            font=("Segoe UI", 11, "bold"),
+            font=self.help_font,
             bd=0,
             highlightthickness=0,
             padx=6,
@@ -409,6 +415,7 @@ class OverlayApp:
             self.title_lbl.configure(bg=bg)
             self.time_lbl.configure(bg=bg)
             self.help_lbl.configure(bg=bg)
+            self._fit_help_text_to_timer()
 
             # Disable color-key visually by not painting it
             # Apply alpha transparency
@@ -435,6 +442,29 @@ class OverlayApp:
 
             self._set_cursor("")
 
+    def _fit_help_text_to_timer(self):
+        """
+        Ensure the helper text never becomes wider than the timer line.
+        Dynamically reduces helper font size if needed.
+        """
+        self.root.update_idletasks()
+
+        # Width of timer line in pixels
+        timer_width = self.time_lbl.winfo_reqwidth()
+
+        # Start from base size scaled with overlay
+        base_size = max(8, int(round(self.help_font_base_size * self.scale)))
+        size = base_size
+        self.help_font.configure(size=size)
+
+        self.root.update_idletasks()
+
+        # Shrink until it fits or hits minimum
+        MIN_SIZE = 7
+        while self.help_lbl.winfo_reqwidth() > timer_width and size > MIN_SIZE:
+            size -= 1
+            self.help_font.configure(size=size)
+            self.root.update_idletasks()
 
 
     # ----------------------------
@@ -730,6 +760,9 @@ class OverlayApp:
         title, timer = compute_display(self.items, now)
         self.title_var.set(title)
         self.time_var.set("" if timer is None else timer)
+
+        if self._grab_mode:
+            self._fit_help_text_to_timer()
 
         if self._mode is None:
             self._snap_to_content(anchor="topleft")
