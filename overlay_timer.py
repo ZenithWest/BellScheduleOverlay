@@ -298,6 +298,7 @@ class OverlayApp:
         )
         self._last_timer_text = ""
         self._last_scale_for_help = self.scale
+        self._current_cursor = ""
         # DO NOT pack yet — we control visibility dynamically
 
 
@@ -698,9 +699,13 @@ class OverlayApp:
 
     def _set_cursor(self, cursor: str):
         """Set cursor on root + labels so it works over the whole box."""
+        if cursor == self._current_cursor:
+            return
+        self._current_cursor = cursor
         self.root.configure(cursor=cursor)
         self.title_lbl.configure(cursor=cursor)
         self.time_lbl.configure(cursor=cursor)
+        self.help_lbl.configure(cursor=cursor)
 
     def _cursor_for_region(self, region: Optional[str]) -> str:
         """
@@ -750,7 +755,7 @@ class OverlayApp:
         py = self.root.winfo_pointery() - self.root.winfo_rooty()
         return px, py
 
-    def _snap_to_content(self, *, anchor: str = "topleft"):
+    def _snap_to_content(self, *, anchor: str = "topleft", deadband_px: int = 2):
         """
         Resize the window to exactly fit its content at the current scale.
         anchor: 'topleft' (default), 'center', 'topright'
@@ -770,6 +775,10 @@ class OverlayApp:
         y = self.root.winfo_y()
         cur_w = self.root.winfo_width()
         cur_h = self.root.winfo_height()
+
+        # <-- DEAD BAND: do nothing if change is tiny
+        if abs(w - cur_w) < deadband_px and abs(h - cur_h) < deadband_px:
+            return
 
         if anchor == "center":
             x = x + (cur_w - w) // 2
