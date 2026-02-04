@@ -278,7 +278,7 @@ class OverlayApp:
 
 
         # Help text shown only in grab mode (CTRL+SHIFT)
-        self.help_var = tk.StringVar(value="CTRL+SHIFT+RightClick to close!")
+        self.help_var = tk.StringVar(value="CTRL+SHIFT+RightClick for Menu!")
         self.help_lbl = tk.Label(
             self.root,
             textvariable=self.help_var,
@@ -334,6 +334,8 @@ class OverlayApp:
 
         # Visual mode
         self._grab_mode = False
+        self.grab_bg = "#000000"   # black
+        self.grab_alpha = 0.5     # 50% opacity
 
         # Mouse bindings (only receive clicks when CTRL+SHIFT is down due to HTTRANSPARENT)
         self.root.bind("<ButtonPress-1>", self._on_left_down)
@@ -393,28 +395,46 @@ class OverlayApp:
 
     def _set_grab_mode(self, grab: bool):
         """
-        grab=False => transparent background (magenta key)
-        grab=True  => opaque black background to make resizing/dragging easier
+        grab=False => fully transparent overlay (color-key)
+        grab=True  => semi-transparent background (alpha)
         """
         if self._grab_mode == grab:
             return
         self._grab_mode = grab
 
-        bg = "black" if grab else self.key_color
-
-        self.root.configure(bg=bg)
-        self.title_lbl.configure(bg=bg)
-        self.time_lbl.configure(bg=bg)
-        self.help_lbl.configure(bg=bg)
-
         if grab:
-            # Show helper text at the bottom
-            self.help_lbl.pack(fill="x", pady=(2, 4))
+            # Switch to semi-transparent mode
+            bg = self.grab_bg
+            self.root.configure(bg=bg)
+            self.title_lbl.configure(bg=bg)
+            self.time_lbl.configure(bg=bg)
+            self.help_lbl.configure(bg=bg)
+
+            # Disable color-key visually by not painting it
+            # Apply alpha transparency
+            self.root.attributes("-alpha", self.grab_alpha)
+
             self._set_cursor("fleur")
+
+            # Show helper text
+            self.help_lbl.pack(fill="x", pady=(2, 4))
+
         else:
+            # Restore full transparency
+            bg = self.key_color
+            self.root.configure(bg=bg)
+            self.title_lbl.configure(bg=bg)
+            self.time_lbl.configure(bg=bg)
+            self.help_lbl.configure(bg=bg)
+
+            # Restore full opacity
+            self.root.attributes("-alpha", 1.0)
+
             # Hide helper text
             self.help_lbl.pack_forget()
+
             self._set_cursor("")
+
 
 
     # ----------------------------
