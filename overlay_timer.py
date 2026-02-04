@@ -395,7 +395,10 @@ class OverlayApp:
 
         # Install click-through-by-hit-test (no WS_EX_TRANSPARENT)
         self.hwnd = self.root.winfo_id()
-        self._hit_test = WinClickThroughByHitTest(self.hwnd)
+        #self._hit_test = WinClickThroughByHitTest(self.hwnd)
+        self._hit_tests = []
+        for w in (self.root, self.title_lbl, self.time_lbl, self.gap_frame, self.help_lbl, self.sub_lbl):
+            self._hit_tests.append(WinClickThroughByHitTest(w.winfo_id()))
 
         # Apply initial style scaling (sets paddings)
         self._apply_scale(self.scale)
@@ -650,6 +653,14 @@ class OverlayApp:
         if top: return "t"
         if bottom: return "b"
         return None
+
+    def _ensure_hittest(self, widget):
+        if not hasattr(self, "_hit_tests"):
+            self._hit_tests = []
+        if not hasattr(widget, "_hittest_installed"):
+            self._hit_tests.append(WinClickThroughByHitTest(widget.winfo_id()))
+            widget._hittest_installed = True
+
 
     def _position_subtitle(self):
         """
@@ -1050,6 +1061,9 @@ class OverlayApp:
 
         if self._mode is None and changed:
             self._snap_to_content(anchor="topleft")
+
+        self._ensure_hittest(self.sub_lbl)
+        self._ensure_hittest(self.help_lbl)
 
         self.root.after(200, self._tick)
 
