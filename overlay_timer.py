@@ -70,40 +70,34 @@ def compute_display(items: List[Item], now: datetime) -> Tuple[str, Optional[str
         if end is None:
             # single-time item
             if now < begin:
-                return item.title, fmt_hhmmss(begin - now)
+                return item.title, None, fmt_hhmmss(begin - now)
 
             nxt = next_begin_of(items, i)
             if nxt is not None:
                 nxt_dt = dt_today(nxt)
                 if begin <= now < nxt_dt:
-                    return (
-                        f"Transitioning from {item.title} to {items[i+1].title}",
-                        fmt_hhmmss(nxt_dt - now),
-                    )
+                    return ("Transitioning", f"{item.title} → {items[i+1].title}", fmt_hhmmss(nxt_dt - now))
 
         else:
             # two-time item
             if now < begin:
-                return item.title, fmt_hhmmss(begin - now)
+                return item.title, None, fmt_hhmmss(begin - now)
 
             if begin <= now < end:
-                return item.title, fmt_hhmmss(end - now)
+                return item.title, None, fmt_hhmmss(end - now)
 
             nxt = next_begin_of(items, i)
             if nxt is not None:
                 nxt_dt = dt_today(nxt)
                 if end <= now < nxt_dt:
-                    return (
-                        f"Transitioning from {item.title} to {items[i+1].title}",
-                        fmt_hhmmss(nxt_dt - now),
-                    )
+                    return ("Transitioning", f"{item.title} → {items[i+1].title}", fmt_hhmmss(nxt_dt - now))
 
     # Past the last time of the last item => show elapsed
     last_dt = dt_today(last_time_of(items[-1]))
     if now >= last_dt:
-        return "End of School", fmt_hhmmss(now - last_dt)
+        return "End of School", None, fmt_hhmmss(now - last_dt)
 
-    return "Schedule", None
+    return "Schedule", None, None
 
 
 # ----------------------------
@@ -279,6 +273,27 @@ class OverlayApp:
         self._last_title = ""
         self._last_time = ""
 
+        # Subtitle (used for "A → B" during transitions)
+        self.sub_var = tk.StringVar(value="")
+        self.sub_font_base_size = 12          # base at scale=1.0
+        self.sub_ratio = 0.75                 # smaller than title
+        self.sub_min_size = 8
+
+        self.sub_font = tkfont.Font(family="Segoe UI", size=self.sub_font_base_size, weight="bold")
+
+        self.sub_lbl = tk.Label(
+            self.root,
+            textvariable=self.sub_var,
+            fg=self.title_lbl.cget("fg"),     # same color as title by default
+            bg=self.key_color,
+            font=self.sub_font,
+            bd=0,
+            highlightthickness=0,
+            padx=10,
+            pady=0,
+            anchor="w"
+        )
+
 
         # Help text shown only in grab mode (CTRL+SHIFT)
         self.help_var = tk.StringVar(value="CTRL+SHIFT+RightClick for Menu!")
@@ -395,6 +410,10 @@ class OverlayApp:
         title_size = max(8, int(round(self.base_title_size * scale)))
         time_size  = max(10, int(round(self.base_time_size * scale)))
 
+        sub_size = int(round(self.sub_font_base_size * scale * self.sub_ratio))
+        sub_size = max(self.sub_min_size, sub_size)
+        self.sub_font.configure(size=sub_size)
+
         # Helper scales with the overlay but stays smaller
         help_size = int(round(self.base_help_size * scale * self.help_ratio))
         help_size = max(self.help_min_size, help_size)
@@ -429,6 +448,7 @@ class OverlayApp:
             self.title_lbl.configure(bg=bg)
             self.time_lbl.configure(bg=bg)
             self.help_lbl.configure(bg=bg)
+            self.sub_lbl.configure(bg=bg)
 
             # Disable color-key visually by not painting it
             # Apply alpha transparency
@@ -811,6 +831,7 @@ class OverlayApp:
         # Main text
         self.title_lbl.configure(fg=color)
         self.time_lbl.configure(fg=color)
+        self.sub_lbl.configure(fg=color)
 
         # Optional: also change the help label color
         # If you want help text to stay yellow always, leave this commented out.
@@ -827,9 +848,19 @@ class OverlayApp:
         self._set_grab_mode(grab)
 
         now = datetime.now()
-        title, timer = compute_display(self.items, now)
+        title, subtitle, timer = compute_display(self.items, datetime.now())
         self.title_var.set(title)
         self.time_var.set("" if timer is None else timer)
+
+        if subtitle:
+            self.sub_var.set(subtitle)
+            if not self.sub_lbl.winfo_ismapped():
+                # Pack it between title and timer
+                self.sub_lbl.pack(fill="x")
+        else:
+            self.sub_var.set("")
+            if self.sub_lbl.winfo_ismapped():
+                self.sub_lbl.pack_forget()
 
         if self._grab_mode:
             t = self.time_var.get()
