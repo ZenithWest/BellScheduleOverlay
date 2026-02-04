@@ -291,7 +291,8 @@ class OverlayApp:
             highlightthickness=0,
             padx=10,
             pady=0,
-            anchor="w"
+            anchor="center",     # ← important
+            justify="center"
         )
 
 
@@ -471,6 +472,7 @@ class OverlayApp:
             self.title_lbl.configure(bg=bg)
             self.time_lbl.configure(bg=bg)
             self.help_lbl.configure(bg=bg)
+            self.sub_lbl.configure(bg=bg)
 
             # Restore full opacity
             self.root.attributes("-alpha", 1.0)
@@ -586,6 +588,43 @@ class OverlayApp:
         if top: return "t"
         if bottom: return "b"
         return None
+
+    def _position_subtitle(self):
+        """
+        Float the subtitle centered horizontally and vertically
+        between the Title and Timer, without affecting layout.
+        """
+        if not self.sub_lbl.winfo_ismapped():
+            return
+
+        self.root.update_idletasks()
+
+        # Vertical placement (between title and timer)
+        title_y = self.title_lbl.winfo_y()
+        title_h = self.title_lbl.winfo_height()
+        timer_y = self.time_lbl.winfo_y()
+
+        gap_top = title_y + title_h
+        gap_bottom = timer_y
+
+        sub_h = self.sub_lbl.winfo_reqheight()
+
+        if gap_bottom - gap_top < sub_h:
+            y = gap_top - sub_h // 2
+        else:
+            y = gap_top + (gap_bottom - gap_top - sub_h) // 2
+
+        # Horizontal centering (this is the key fix)
+        win_w = self.root.winfo_width()
+        sub_w = self.sub_lbl.winfo_reqwidth()
+
+        x = (win_w - sub_w) // 2
+
+        self.sub_lbl.place(x=x, y=y)
+        self.sub_lbl.lift()
+
+
+
 
     # ----------------------------
     # Mouse handlers (CTRL+SHIFT held)
@@ -854,13 +893,16 @@ class OverlayApp:
 
         if subtitle:
             self.sub_var.set(subtitle)
+
             if not self.sub_lbl.winfo_ismapped():
-                # Pack it between title and timer
-                self.sub_lbl.pack(fill="x")
+                # Make it visible but floating
+                self.sub_lbl.place(x=0, y=0)  # temporary; real position set next
+            self._position_subtitle()
         else:
             self.sub_var.set("")
             if self.sub_lbl.winfo_ismapped():
-                self.sub_lbl.pack_forget()
+                self.sub_lbl.place_forget()
+
 
         if self._grab_mode:
             t = self.time_var.get()
