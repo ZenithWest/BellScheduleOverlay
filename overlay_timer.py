@@ -276,6 +276,9 @@ class OverlayApp:
         )
         self.time_lbl.pack(fill="both")
 
+        self._last_title = ""
+        self._last_time = ""
+
 
         # Help text shown only in grab mode (CTRL+SHIFT)
         self.help_var = tk.StringVar(value="CTRL+SHIFT+RightClick for Menu!")
@@ -824,7 +827,10 @@ class OverlayApp:
                 self._last_timer_text = t
                 self._last_scale_for_help = self.scale
 
-        if self._mode is None:
+        changed = (title != self._last_title) or (timer != self._last_time)
+        self._last_title, self._last_time = title, timer
+
+        if self._mode is None and changed:
             self._snap_to_content(anchor="topleft")
 
         self.root.after(200, self._tick)
