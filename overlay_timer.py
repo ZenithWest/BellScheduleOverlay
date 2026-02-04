@@ -623,6 +623,20 @@ class OverlayApp:
         self.sub_lbl.place(x=x, y=y)
         self.sub_lbl.lift()
 
+    def _subtitle_pixel_size(self, text: str) -> tuple[int, int]:
+        """
+        Measure subtitle width/height in pixels without needing the widget mapped.
+        """
+        # width in pixels of the text
+        w = self.sub_font.measure(text)
+
+        # height in pixels of one line of text
+        h = self.sub_font.metrics("linespace")
+
+        # If you want a tiny vertical cushion, add a couple pixels:
+        # h += 2
+
+        return w, h
 
 
 
@@ -894,14 +908,36 @@ class OverlayApp:
         if subtitle:
             self.sub_var.set(subtitle)
 
-            if not self.sub_lbl.winfo_ismapped():
-                # Make it visible but floating
-                self.sub_lbl.place(x=0, y=0)  # temporary; real position set next
-            self._position_subtitle()
+            # Ensure geometry is up to date for title/timer positions
+            self.root.update_idletasks()
+
+            # Compute vertical gap
+            title_y = self.title_lbl.winfo_y()
+            title_h = self.title_lbl.winfo_height()
+            timer_y = self.time_lbl.winfo_y()
+
+            gap_top = title_y + title_h
+            gap_bottom = timer_y
+
+            sub_w, sub_h = self._subtitle_pixel_size(subtitle)
+
+            # Choose y centered in the gap (fallback if gap is tiny)
+            if gap_bottom - gap_top < sub_h:
+                y = gap_top
+            else:
+                y = gap_top + (gap_bottom - gap_top - sub_h) // 2
+
+            # Center horizontally in the window
+            win_w = self.root.winfo_width()
+            x = (win_w - sub_w) // 2
+
+            # Place ONCE at the final location (no visible jump)
+            self.sub_lbl.place(x=x, y=y, width=sub_w, height=sub_h)
+            self.sub_lbl.lift()
         else:
             self.sub_var.set("")
-            if self.sub_lbl.winfo_ismapped():
-                self.sub_lbl.place_forget()
+            self.sub_lbl.place_forget()
+
 
 
         if self._grab_mode:
