@@ -282,10 +282,12 @@ class OverlayApp:
 
         # Help text shown only in grab mode (CTRL+SHIFT)
         self.help_var = tk.StringVar(value="CTRL+SHIFT+RightClick for Menu!")
-        self.help_font_base_size = 11
+        self.base_help_size = 11          # at scale=1.0
+        self.help_ratio = 0.65            # helper = 65% of normal scaling
+        self.help_min_size = 7
         self.help_font = tkfont.Font(
             family="Segoe UI",
-            size=self.help_font_base_size,
+            size=self.base_help_size,
             weight="bold"
         )
         self.help_lbl = tk.Label(
@@ -391,14 +393,20 @@ class OverlayApp:
         self.scale = scale
 
         title_size = max(8, int(round(self.base_title_size * scale)))
-        time_size = max(10, int(round(self.base_time_size * scale)))
+        time_size  = max(10, int(round(self.base_time_size * scale)))
+
+        # Helper scales with the overlay but stays smaller
+        help_size = int(round(self.base_help_size * scale * self.help_ratio))
+        help_size = max(self.help_min_size, help_size)
 
         padx = int(round(self.base_padx * scale))
         title_pady = int(round(self.base_title_pady * scale))
-        time_pady = int(round(self.base_time_pady * scale))
+        time_pady  = int(round(self.base_time_pady * scale))
 
         self.title_font.configure(size=title_size)
         self.time_font.configure(size=time_size)
+        self.help_font.configure(size=help_size)
+
         self.title_lbl.configure(padx=padx, pady=title_pady)
         self.time_lbl.configure(padx=padx, pady=time_pady)
 
@@ -430,8 +438,10 @@ class OverlayApp:
 
             # Show helper text
             self.help_lbl.pack(fill="x", pady=(2, 4))
+            self._apply_scale(self.scale)          # ensures help font is correct instantly
+            self._snap_to_content(anchor="topleft")
 
-            self._fit_help_text_to_timer()
+            #self._fit_help_text_to_timer()
 
 
         else:
@@ -447,6 +457,7 @@ class OverlayApp:
 
             # Hide helper text
             self.help_lbl.pack_forget()
+            self._snap_to_content(anchor="topleft")
 
             self._set_cursor("")
 
@@ -823,7 +834,7 @@ class OverlayApp:
         if self._grab_mode:
             t = self.time_var.get()
             if t != self._last_timer_text or self.scale != self._last_scale_for_help:
-                self._fit_help_text_to_timer()
+                #self._fit_help_text_to_timer()
                 self._last_timer_text = t
                 self._last_scale_for_help = self.scale
 
