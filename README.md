@@ -1,2 +1,2 @@
 # BellScheduleOverlay
-A transparent overlay to show what period it is how how long until it ends
+A transparent overlay to show what period it is and how long before it ends
