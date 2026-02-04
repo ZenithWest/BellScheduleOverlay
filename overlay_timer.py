@@ -296,6 +296,8 @@ class OverlayApp:
             padx=6,
             pady=2
         )
+        self._last_timer_text = ""
+        self._last_scale_for_help = self.scale
         # DO NOT pack yet — we control visibility dynamically
 
 
@@ -415,7 +417,6 @@ class OverlayApp:
             self.title_lbl.configure(bg=bg)
             self.time_lbl.configure(bg=bg)
             self.help_lbl.configure(bg=bg)
-            self._fit_help_text_to_timer()
 
             # Disable color-key visually by not painting it
             # Apply alpha transparency
@@ -425,6 +426,9 @@ class OverlayApp:
 
             # Show helper text
             self.help_lbl.pack(fill="x", pady=(2, 4))
+
+            self._fit_help_text_to_timer()
+
 
         else:
             # Restore full transparency
@@ -444,27 +448,70 @@ class OverlayApp:
 
     def _fit_help_text_to_timer(self):
         """
-        Ensure the helper text never becomes wider than the timer line.
-        Dynamically reduces helper font size if needed.
+        Stable helper-text fitting:
+        - Uses font.measure() (pixel-accurate, no geometry timing jitter)
+        - Uses hysteresis to prevent rapid flip/flop
+        - Only recalculates when needed
         """
         self.root.update_idletasks()
 
-        # Width of timer line in pixels
-        timer_width = self.time_lbl.winfo_reqwidth()
+        help_text = self.help_var.get()
+        timer_text = self.time_var.get()
 
-        # Start from base size scaled with overlay
-        base_size = max(8, int(round(self.help_font_base_size * self.scale)))
-        size = base_size
-        self.help_font.configure(size=size)
+        # If timer is blank (rare), don't change help size
+        if not timer_text:
+            return
 
-        self.root.update_idletasks()
+        # Compute "target max width" = width of timer line (text + padding)
+        # IMPORTANT: include the same horizontal padding the timer label uses
+        timer_padx = int(self.time_lbl.cget("padx"))
+        timer_target_px = self.time_font.measure(timer_text) + 2 * timer_padx
 
-        # Shrink until it fits or hits minimum
-        MIN_SIZE = 7
-        while self.help_lbl.winfo_reqwidth() > timer_width and size > MIN_SIZE:
-            size -= 1
+        # Helper padding
+        help_padx = int(self.help_lbl.cget("padx"))
+
+        # Base help size (scaled)
+        base_size = max(7, int(round(self.help_font_base_size * self.scale)))
+
+        # Current size
+        cur_size = int(self.help_font.cget("size"))
+
+        # We'll try to keep it as large as possible but never exceeding timer_target_px.
+        # Hysteresis (deadband) in pixels:
+        # - Only shrink if overflow > 2 px
+        # - Only grow if we have at least 10 px spare (prevents flip-flop)
+        SHRINK_EPS = 2
+        GROW_EPS = 10
+
+        def help_width_at(size: int) -> int:
             self.help_font.configure(size=size)
-            self.root.update_idletasks()
+            return self.help_font.measure(help_text) + 2 * help_padx
+
+        # Measure at current size
+        cur_w = help_width_at(cur_size)
+
+        # If too wide, shrink until it fits (with a small eps)
+        if cur_w > timer_target_px + SHRINK_EPS:
+            size = cur_size
+            MIN_SIZE = 7
+            while size > MIN_SIZE and help_width_at(size) > timer_target_px:
+                size -= 1
+            if size != cur_size:
+                self.help_font.configure(size=size)
+            return
+
+        # If comfortably smaller, we can try to grow (up to base_size), but only if we have room
+        if cur_size < base_size and cur_w < timer_target_px - GROW_EPS:
+            size = cur_size
+            while size < base_size and help_width_at(size + 1) <= timer_target_px:
+                size += 1
+            if size != cur_size:
+                self.help_font.configure(size=size)
+            return
+
+        # Otherwise: stay put (prevents rapid flipping)
+        self.help_font.configure(size=cur_size)
+
 
 
     # ----------------------------
@@ -762,7 +809,11 @@ class OverlayApp:
         self.time_var.set("" if timer is None else timer)
 
         if self._grab_mode:
-            self._fit_help_text_to_timer()
+            t = self.time_var.get()
+            if t != self._last_timer_text or self.scale != self._last_scale_for_help:
+                self._fit_help_text_to_timer()
+                self._last_timer_text = t
+                self._last_scale_for_help = self.scale
 
         if self._mode is None:
             self._snap_to_content(anchor="topleft")
