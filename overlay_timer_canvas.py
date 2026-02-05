@@ -209,6 +209,99 @@ def force_taskbar_icon(hwnd: int):
     user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
                        0x0001 | 0x0002 | 0x0020)  # SWP_NOSIZE|SWP_NOMOVE|SWP_FRAMECHANGED
 
+def set_os_clickthrough(hwnd: int, enable: bool):
+    """
+    Toggle OS-level click-through using WS_EX_TRANSPARENT.
+    Must be applied to BOTH the toplevel HWND and the Canvas HWND.
+    """
+    if not is_windows():
+        return
+
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    GWL_EXSTYLE = -20
+    WS_EX_TRANSPARENT = 0x00000020
+
+    GetWindowLongW = user32.GetWindowLongW
+    SetWindowLongW = user32.SetWindowLongW
+    GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+    SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
+    GetWindowLongW.restype = ctypes.c_long
+    SetWindowLongW.restype = ctypes.c_long
+
+    exstyle = GetWindowLongW(hwnd, GWL_EXSTYLE)
+    if enable:
+        exstyle |= WS_EX_TRANSPARENT
+    else:
+        exstyle &= ~WS_EX_TRANSPARENT
+
+    SetWindowLongW(hwnd, GWL_EXSTYLE, exstyle)
+
+    # Force Windows to apply the style immediately
+    user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
+                        0x0001 | 0x0002 | 0x0020)  # SWP_NOMOVE|SWP_NOSIZE|SWP_FRAMECHANGED
+
+
+def _get_set_window_long_ptr():
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+
+    GetWindowLongPtrW = getattr(user32, "GetWindowLongPtrW", None)
+    SetWindowLongPtrW = getattr(user32, "SetWindowLongPtrW", None)
+
+    if GetWindowLongPtrW and SetWindowLongPtrW:
+        GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+        GetWindowLongPtrW.restype = ctypes.c_void_p
+        SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+        SetWindowLongPtrW.restype = ctypes.c_void_p
+        return GetWindowLongPtrW, SetWindowLongPtrW, True
+
+    # 32-bit fallback
+    GetWindowLongW = user32.GetWindowLongW
+    SetWindowLongW = user32.SetWindowLongW
+    GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+    GetWindowLongW.restype = ctypes.c_long
+    SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
+    SetWindowLongW.restype = ctypes.c_long
+    return GetWindowLongW, SetWindowLongW, False
+
+
+def set_clickthrough(hwnd: int, enable: bool):
+    """
+    Enables/disables OS-level click-through for a specific HWND using WS_EX_TRANSPARENT.
+    This is more reliable than WM_NCHITTEST for Tk child windows.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+
+    GWL_EXSTYLE = -20
+    WS_EX_TRANSPARENT = 0x00000020
+
+    GetWL, SetWL, is_ptr = _get_set_window_long_ptr()
+
+    exstyle = GetWL(hwnd, GWL_EXSTYLE)
+    # exstyle might be void* on 64-bit; normalize to int
+    exstyle_int = int(exstyle) if exstyle is not None else 0
+
+    if enable:
+        exstyle_int |= WS_EX_TRANSPARENT
+    else:
+        exstyle_int &= ~WS_EX_TRANSPARENT
+
+    if is_ptr:
+        SetWL(hwnd, GWL_EXSTYLE, ctypes.c_void_p(exstyle_int))
+    else:
+        SetWL(hwnd, GWL_EXSTYLE, exstyle_int)
+
+    # Force Windows to apply style changes immediately
+    user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
+                        0x0001 | 0x0002 | 0x0020)  # SWP_NOMOVE|SWP_NOSIZE|SWP_FRAMECHANGED
+
 
 def set_ws_ex_transparent(hwnd: int, enable: bool):
     """
@@ -362,13 +455,29 @@ class OverlayApp:
         self.root.wm_attributes("-transparentcolor", self.key_color)
 
         # Install click-through by hit-test on BOTH the toplevel and the canvas HWND
-        self._hit_tests = [
-            WinClickThroughByHitTest(self.root.winfo_id()),
-            WinClickThroughByHitTest(self.canvas.winfo_id()),
-        ]
+        #self._hit_tests = [
+        #    WinClickThroughByHitTest(self.root.winfo_id()),
+        #    WinClickThroughByHitTest(self.canvas.winfo_id()),
+        #]
+
+        print(self.root)
+        print(self.title_id)
+        print(self.time_id)
+        print(self.help_id)
+        print(self.sub_id)
+
+        self._hwnd_root = self.root.winfo_id()
+        self._hwnd_canvas = self.canvas.winfo_id()
+
+        # self._click_hwnds = [w.winfo_id() for w in (
+        #     self.root, self.title_id, self.time_id, self.help_id, self.sub_id
+        # )]
+
 
         if is_windows():
             force_taskbar_icon(self.root.winfo_id())
+            set_os_clickthrough(self._hwnd_root, True)
+            set_os_clickthrough(self._hwnd_canvas, True)
             self.hwnd = self.root.winfo_id()
             set_ws_ex_transparent(self.hwnd, True)  # start click-through
 
@@ -494,10 +603,14 @@ class OverlayApp:
             return
         self._grab_mode = grab
 
-        
+
         if is_windows():
-            # In grab mode we must be interactive, otherwise fully click-through
-            set_ws_ex_transparent(self.root.winfo_id(), enable=not grab)
+            # Normal mode -> click-through ON
+            # Grab mode   -> click-through OFF (so drag/resize/menu works)
+            set_os_clickthrough(self._hwnd_root, enable=(not grab))
+            set_os_clickthrough(self._hwnd_canvas, enable=(not grab))
+            for hwnd in getattr(self, "_click_hwnds", []):
+                set_clickthrough(hwnd, enable=(not grab))
 
         if grab:
             self.root.attributes("-alpha", self.grab_alpha)
