@@ -307,6 +307,7 @@ def set_ws_ex_transparent(hwnd: int, enable: bool):
     """
     Toggle WS_EX_TRANSPARENT so the window becomes click-through at the OS level.
     """
+    return
     if not is_windows():
         return
 
@@ -315,6 +316,7 @@ def set_ws_ex_transparent(hwnd: int, enable: bool):
 
     user32 = ctypes.windll.user32
     GWL_EXSTYLE = -20
+    WS_EX_LAYERED = 0x00080000
     WS_EX_TRANSPARENT = 0x00000020
 
     GetWindowLongW = user32.GetWindowLongW
@@ -325,6 +327,10 @@ def set_ws_ex_transparent(hwnd: int, enable: bool):
     SetWindowLongW.restype = ctypes.c_long
 
     exstyle = GetWindowLongW(hwnd, GWL_EXSTYLE)
+
+    # Always layered
+    exstyle |= WS_EX_LAYERED
+
     if enable:
         exstyle |= WS_EX_TRANSPARENT
     else:
@@ -455,31 +461,30 @@ class OverlayApp:
         self.root.wm_attributes("-transparentcolor", self.key_color)
 
         # Install click-through by hit-test on BOTH the toplevel and the canvas HWND
-        #self._hit_tests = [
-        #    WinClickThroughByHitTest(self.root.winfo_id()),
-        #    WinClickThroughByHitTest(self.canvas.winfo_id()),
-        #]
+        self._hit_tests = [
+           WinClickThroughByHitTest(self.root.winfo_id()),
+           WinClickThroughByHitTest(self.canvas.winfo_id()),
 
-        print(self.root)
-        print(self.title_id)
-        print(self.time_id)
-        print(self.help_id)
-        print(self.sub_id)
+        ]
 
         self._hwnd_root = self.root.winfo_id()
         self._hwnd_canvas = self.canvas.winfo_id()
 
-        # self._click_hwnds = [w.winfo_id() for w in (
-        #     self.root, self.title_id, self.time_id, self.help_id, self.sub_id
-        # )]
+        self._click_hwnds = [self.root.winfo_id(), self.canvas.winfo_id()] #, 
+#                            self.title_id, self.time_id, self.help_id, self.sub_id]
+
 
 
         if is_windows():
             force_taskbar_icon(self.root.winfo_id())
-            set_os_clickthrough(self._hwnd_root, True)
-            set_os_clickthrough(self._hwnd_canvas, True)
-            self.hwnd = self.root.winfo_id()
-            set_ws_ex_transparent(self.hwnd, True)  # start click-through
+            #set_os_clickthrough(self._hwnd_root, True)
+            #set_os_clickthrough(self._hwnd_canvas, True)
+            #self.hwnd = self.root.winfo_id()
+            #set_ws_ex_transparent(self.hwnd, True)  # start click-through
+            for hwnd in self._click_hwnds:
+                #set_os_clickthrough(hwnd, True)  # enable click-through when NOT grabbing
+                set_ws_ex_transparent(hwnd, True)  # start click-through
+
 
         # Initial scale/layout
         self._apply_scale(self.scale)
@@ -500,6 +505,68 @@ class OverlayApp:
         help_size = max(self.help_min_size, int(round(self.base_help_size * scale * self.help_ratio)))
         self.help_font.configure(size=help_size)
 
+
+    def _fit_subtitle_to_gap(self, gap_px: int):
+        """
+        Shrink subtitle font (vertically) until its line height fits within gap_px.
+        Stable: avoids rapid flip/flop by using hysteresis.
+        """
+        if gap_px <= 0:
+            return
+
+        # Desired subtitle size at current scale
+        desired = int(round(self.sub_font_base_size * self.scale * self.sub_ratio))
+        desired = max(self.sub_min_size, desired)
+
+        # Track last applied size for stability
+        if not hasattr(self, "_sub_size_current") or self._sub_size_current is None:
+            self._sub_size_current = desired
+
+        cur = self._sub_size_current
+
+        # Apply current size to measure height
+        self.sub_font.configure(size=cur)
+        cur_h = self.sub_font.metrics("linespace")
+
+        # Hysteresis (deadband) in pixels:
+        # - shrink immediately if it doesn't fit
+        # - only grow back if we have plenty of room (prevents oscillation)
+        SHRINK_EPS = 0
+        GROW_EPS = 6
+
+        # If too tall -> shrink until it fits
+        if cur_h > gap_px - SHRINK_EPS:
+            s = cur
+            while s > self.sub_min_size:
+                s -= 1
+                self.sub_font.configure(size=s)
+                if self.sub_font.metrics("linespace") <= gap_px:
+                    self._sub_size_current = s
+                    return
+            self._sub_size_current = self.sub_min_size
+            self.sub_font.configure(size=self.sub_min_size)
+            return
+
+        # If it fits and we're below desired -> grow back cautiously
+        if cur < desired and (gap_px - cur_h) >= GROW_EPS:
+            s = cur
+            while s < desired:
+                ns = s + 1
+                self.sub_font.configure(size=ns)
+                if self.sub_font.metrics("linespace") <= gap_px:
+                    s = ns
+                    continue
+                break
+            self._sub_size_current = s
+            self.sub_font.configure(size=s)
+            return
+
+        # Otherwise keep current size
+        self._sub_size_current = cur
+        self.sub_font.configure(size=cur)
+
+
+
     def _layout_and_snap(self, *, anchor: str = "topleft", deadband_px: int = 2):
         self.root.update_idletasks()
 
@@ -517,32 +584,69 @@ class OverlayApp:
 
         cx = cur_w // 2
 
-        y = top_pad
-        self.canvas.coords(self.title_id, cx, y)
-        y += self.title_font.metrics("linespace") + gap_pad
+        # ----------------------------
+        # LOCKED layout:
+        # Title at fixed y
+        # Timer at fixed y (not affected by subtitle)
+        # Subtitle forced into the gap between title and timer
+        # ----------------------------
 
+        y_title = top_pad
+        self.canvas.coords(self.title_id, cx, y_title)
+        title_h = self.title_font.metrics("linespace")
+
+        # Locked gap: always big enough for the subtitle line
+        gap_between_title_and_timer = max(
+            int(round(6 * self.scale)),                       # minimum breathing room
+            self.sub_font.metrics("linespace") + gap_pad       # enough space for subtitle
+        )
+        y_timer = y_title + title_h + gap_between_title_and_timer
+        self.canvas.coords(self.time_id, cx, y_timer)
+        time_h = self.time_font.metrics("linespace")
+
+        # Subtitle is drawn INSIDE the gap, without moving timer
         if sub_visible:
-            self.canvas.coords(self.sub_id, cx, y)
-            y += self.sub_font.metrics("linespace") + gap_pad
+            gap_top = y_title + title_h
+            gap_bottom = y_timer
+            gap_px = gap_bottom - gap_top
 
-        self.canvas.coords(self.time_id, cx, y)
-        y += self.time_font.metrics("linespace") + gap_pad
+            if gap_px > 0:
+                # Try to shrink-to-fit-gap vertically
+                if hasattr(self, "_fit_subtitle_to_gap"):
+                    self._fit_subtitle_to_gap(gap_px)
 
+                sub_h = self.sub_font.metrics("linespace")
+
+                # If still doesn't fit, hide it (do NOT move timer)
+                if sub_h > gap_px:
+                    self.canvas.itemconfigure(self.sub_id, state="hidden")
+                    sub_visible = False
+                else:
+                    y_sub = gap_top + (gap_px - sub_h) // 2
+                    self.canvas.coords(self.sub_id, cx, y_sub)
+            else:
+                self.canvas.itemconfigure(self.sub_id, state="hidden")
+                sub_visible = False
+
+        # Help always comes AFTER timer
+        y_help = y_timer + time_h + gap_pad
         if help_visible:
-            self.canvas.coords(self.help_id, cx, y)
-            y += self.help_font.metrics("linespace") + bottom_pad
-        else:
-            y += bottom_pad
+            self.canvas.coords(self.help_id, cx, y_help)
 
+        # ----------------------------
+        # Compute bbox of visible content for snapping
+        # ----------------------------
         bbox = self.canvas.bbox(self.title_id, self.time_id)
         if bbox is None:
             return
 
         x0, y0, x1, y1 = bbox
+
         if sub_visible:
             b2 = self.canvas.bbox(self.sub_id)
             if b2:
                 x0, y0, x1, y1 = min(x0, b2[0]), min(y0, b2[1]), max(x1, b2[2]), max(y1, b2[3])
+
         if help_visible:
             b3 = self.canvas.bbox(self.help_id)
             if b3:
@@ -561,22 +665,51 @@ class OverlayApp:
         cur_w2 = self.root.winfo_width()
         cur_h2 = self.root.winfo_height()
 
+        # ----------------------------
+        # Deadband: if size change is tiny, avoid resizing window
+        # Still recenter items based on actual current width.
+        # ----------------------------
         if abs(w - cur_w2) < deadband_px and abs(h - cur_h2) < deadband_px:
             self.canvas.config(width=cur_w2, height=cur_h2)
-            # recenter on actual width
-            cx = cur_w2 // 2
-            y = top_pad
-            self.canvas.coords(self.title_id, cx, y)
-            y += self.title_font.metrics("linespace") + gap_pad
+
+            cx2 = cur_w2 // 2
+
+            # Reapply locked coords using actual width
+            y_title = top_pad
+            self.canvas.coords(self.title_id, cx2, y_title)
+            title_h = self.title_font.metrics("linespace")
+
+            y_timer = y_title + title_h + gap_between_title_and_timer
+            self.canvas.coords(self.time_id, cx2, y_timer)
+            time_h = self.time_font.metrics("linespace")
+
             if sub_visible:
-                self.canvas.coords(self.sub_id, cx, y)
-                y += self.sub_font.metrics("linespace") + gap_pad
-            self.canvas.coords(self.time_id, cx, y)
-            y += self.time_font.metrics("linespace") + gap_pad
+                gap_top = y_title + title_h
+                gap_bottom = y_timer
+                gap_px = gap_bottom - gap_top
+
+                if gap_px > 0:
+                    if hasattr(self, "_fit_subtitle_to_gap"):
+                        self._fit_subtitle_to_gap(gap_px)
+                    sub_h = self.sub_font.metrics("linespace")
+                    if sub_h <= gap_px:
+                        y_sub = gap_top + (gap_px - sub_h) // 2
+                        self.canvas.coords(self.sub_id, cx2, y_sub)
+                    else:
+                        self.canvas.itemconfigure(self.sub_id, state="hidden")
+                        sub_visible = False
+                else:
+                    self.canvas.itemconfigure(self.sub_id, state="hidden")
+                    sub_visible = False
+
             if help_visible:
-                self.canvas.coords(self.help_id, cx, y)
+                y_help = y_timer + time_h + gap_pad
+                self.canvas.coords(self.help_id, cx2, y_help)
             return
 
+        # ----------------------------
+        # Resize window & canvas
+        # ----------------------------
         if anchor == "center":
             x = x + (cur_w2 - w) // 2
             ywin = ywin + (cur_h2 - h) // 2
@@ -586,17 +719,37 @@ class OverlayApp:
         self.root.geometry(f"{w}x{h}+{x}+{ywin}")
         self.canvas.config(width=w, height=h)
 
+        # Reapply locked coords with new width
         cx = w // 2
-        y = top_pad
-        self.canvas.coords(self.title_id, cx, y)
-        y += self.title_font.metrics("linespace") + gap_pad
+        y_title = top_pad
+        self.canvas.coords(self.title_id, cx, y_title)
+        title_h = self.title_font.metrics("linespace")
+
+        y_timer = y_title + title_h + gap_between_title_and_timer
+        self.canvas.coords(self.time_id, cx, y_timer)
+        time_h = self.time_font.metrics("linespace")
+
         if sub_visible:
-            self.canvas.coords(self.sub_id, cx, y)
-            y += self.sub_font.metrics("linespace") + gap_pad
-        self.canvas.coords(self.time_id, cx, y)
-        y += self.time_font.metrics("linespace") + gap_pad
+            gap_top = y_title + title_h
+            gap_bottom = y_timer
+            gap_px = gap_bottom - gap_top
+
+            if gap_px > 0:
+                if hasattr(self, "_fit_subtitle_to_gap"):
+                    self._fit_subtitle_to_gap(gap_px)
+                sub_h = self.sub_font.metrics("linespace")
+                if sub_h <= gap_px:
+                    y_sub = gap_top + (gap_px - sub_h) // 2
+                    self.canvas.coords(self.sub_id, cx, y_sub)
+                else:
+                    self.canvas.itemconfigure(self.sub_id, state="hidden")
+            else:
+                self.canvas.itemconfigure(self.sub_id, state="hidden")
+
         if help_visible:
-            self.canvas.coords(self.help_id, cx, y)
+            y_help = y_timer + time_h + gap_pad
+            self.canvas.coords(self.help_id, cx, y_help)
+
 
     def _set_grab_mode(self, grab: bool):
         if self._grab_mode == grab:
@@ -604,13 +757,14 @@ class OverlayApp:
         self._grab_mode = grab
 
 
-        if is_windows():
+        if is_windows() or True:
             # Normal mode -> click-through ON
             # Grab mode   -> click-through OFF (so drag/resize/menu works)
-            set_os_clickthrough(self._hwnd_root, enable=(not grab))
-            set_os_clickthrough(self._hwnd_canvas, enable=(not grab))
+            #set_os_clickthrough(self._hwnd_root, enable=(not grab))
+            #set_os_clickthrough(self._hwnd_canvas, enable=(not grab))
             for hwnd in getattr(self, "_click_hwnds", []):
-                set_clickthrough(hwnd, enable=(not grab))
+                #set_clickthrough(hwnd, enable=(not grab))
+                set_ws_ex_transparent(hwnd, enable=(not grab))
 
         if grab:
             self.root.attributes("-alpha", self.grab_alpha)
@@ -807,8 +961,13 @@ class OverlayApp:
         else:
             self.canvas.itemconfigure(self.sub_id, text="", state="hidden")
 
+        # Always lay out so subtitle never sits at (0,0).
+        # While dragging/resizing, use a huge deadband so we don't fight the window geometry.
         if self._mode is None:
             self._layout_and_snap(anchor="topleft")
+        else:
+            self._layout_and_snap(anchor="topleft", deadband_px=10**9)
+
 
         self.root.after(200, self._tick)
 
