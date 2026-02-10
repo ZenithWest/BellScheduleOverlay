@@ -375,7 +375,7 @@ class OverlayApp:
 
         self.base_title_size = 18
         self.base_time_size = 34
-        self.sub_font_base_size = 12
+        self.sub_font_base_size = 18
         self.sub_ratio = 0.75
         self.sub_min_size = 7
 
@@ -600,6 +600,8 @@ class OverlayApp:
             int(round(6 * self.scale)),                       # minimum breathing room
             self.sub_font.metrics("linespace") + gap_pad       # enough space for subtitle
         )
+        #print(gap_between_title_and_timer)
+        gap_between_title_and_timer = 20
         y_timer = y_title + title_h + gap_between_title_and_timer
         self.canvas.coords(self.time_id, cx, y_timer)
         time_h = self.time_font.metrics("linespace")
@@ -611,20 +613,22 @@ class OverlayApp:
             gap_px = gap_bottom - gap_top
 
             if gap_px > 0:
+                #print(f"gap_px={gap_px}")
                 # Try to shrink-to-fit-gap vertically
-                if hasattr(self, "_fit_subtitle_to_gap"):
-                    self._fit_subtitle_to_gap(gap_px)
+                # if hasattr(self, "_fit_subtitle_to_gap"):
+                #    self._fit_subtitle_to_gap(gap_px)
 
                 sub_h = self.sub_font.metrics("linespace")
 
                 # If still doesn't fit, hide it (do NOT move timer)
-                if sub_h > gap_px:
-                    self.canvas.itemconfigure(self.sub_id, state="hidden")
-                    sub_visible = False
-                else:
-                    y_sub = gap_top + (gap_px - sub_h) // 2
-                    self.canvas.coords(self.sub_id, cx, y_sub)
+                #if sub_h > gap_px:
+                #    self.canvas.itemconfigure(self.sub_id, state="hidden")
+                #    sub_visible = False
+                #else:
+                y_sub = gap_top + (gap_px - sub_h) // 2
+                self.canvas.coords(self.sub_id, cx, y_sub)
             else:
+                print(f"else gap_px={gap_px}")
                 self.canvas.itemconfigure(self.sub_id, state="hidden")
                 sub_visible = False
 
@@ -689,15 +693,15 @@ class OverlayApp:
                 gap_px = gap_bottom - gap_top
 
                 if gap_px > 0:
-                    if hasattr(self, "_fit_subtitle_to_gap"):
-                        self._fit_subtitle_to_gap(gap_px)
+                    # if hasattr(self, "_fit_subtitle_to_gap"):
+                    #     self._fit_subtitle_to_gap(gap_px)
                     sub_h = self.sub_font.metrics("linespace")
-                    if sub_h <= gap_px:
-                        y_sub = gap_top + (gap_px - sub_h) // 2
-                        self.canvas.coords(self.sub_id, cx2, y_sub)
-                    else:
-                        self.canvas.itemconfigure(self.sub_id, state="hidden")
-                        sub_visible = False
+                    #if sub_h <= gap_px:
+                    y_sub = gap_top + (gap_px - sub_h) // 2
+                    self.canvas.coords(self.sub_id, cx2, y_sub)
+                    #else:
+                    #    self.canvas.itemconfigure(self.sub_id, state="hidden")
+                    #    sub_visible = False
                 else:
                     self.canvas.itemconfigure(self.sub_id, state="hidden")
                     sub_visible = False
@@ -735,16 +739,16 @@ class OverlayApp:
             gap_px = gap_bottom - gap_top
 
             if gap_px > 0:
-                if hasattr(self, "_fit_subtitle_to_gap"):
-                    self._fit_subtitle_to_gap(gap_px)
+                # if hasattr(self, "_fit_subtitle_to_gap"):
+                #     self._fit_subtitle_to_gap(gap_px)
                 sub_h = self.sub_font.metrics("linespace")
-                if sub_h <= gap_px:
-                    y_sub = gap_top + (gap_px - sub_h) // 2
-                    self.canvas.coords(self.sub_id, cx, y_sub)
-                else:
-                    self.canvas.itemconfigure(self.sub_id, state="hidden")
-            else:
-                self.canvas.itemconfigure(self.sub_id, state="hidden")
+                # if sub_h <= gap_px:
+                y_sub = gap_top + (gap_px - sub_h) // 2
+                self.canvas.coords(self.sub_id, cx, y_sub)
+            #     else:
+            #         self.canvas.itemconfigure(self.sub_id, state="hidden")
+            # else:
+            #     self.canvas.itemconfigure(self.sub_id, state="hidden")
 
         if help_visible:
             y_help = y_timer + time_h + gap_pad
